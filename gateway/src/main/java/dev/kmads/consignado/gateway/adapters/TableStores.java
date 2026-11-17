@@ -1,5 +1,6 @@
 package dev.kmads.consignado.gateway.adapters;
 
+import dev.kmads.consignado.gateway.core.Logs;
 import com.azure.core.credential.TokenCredential;
 import com.azure.core.http.rest.Response;
 import com.azure.data.tables.TableClient;
@@ -311,7 +312,7 @@ public final class TableStores {
                 put(e, "ipHash", ipHash);
                 table.createEntity(e);
             } catch (RuntimeException ex) {
-                LOG.log(Level.WARNING, "audit write failed: {0}", ex.getClass().getSimpleName());
+                LOG.log(Level.WARNING, Logs.fmt("audit write failed: {0}", ex.getClass().getSimpleName()));
             }
         };
     }

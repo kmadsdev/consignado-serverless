@@ -1,5 +1,6 @@
 package dev.kmads.consignado.gateway.adapters;
 
+import dev.kmads.consignado.gateway.core.Logs;
 import com.fasterxml.jackson.databind.JsonNode;
 import dev.kmads.consignado.gateway.core.ClusterView;
 import dev.kmads.consignado.gateway.core.Json;
@@ -73,7 +74,7 @@ public final class KubeClusterObserver implements ClusterObserver {
                     endpoints == null ? 0 : KubeParser.readyEndpoints(endpoints));
         } catch (Exception e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
-            LOG.log(Level.INFO, "Kubernetes API not reachable: {0}", e.getClass().getSimpleName());
+            LOG.log(Level.INFO, Logs.fmt("Kubernetes API not reachable: {0}", e.getClass().getSimpleName()));
             return ClusterView.DOWN;
         }
     }
@@ -86,7 +87,7 @@ public final class KubeClusterObserver implements ClusterObserver {
                 .GET().build();
         HttpResponse<byte[]> response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
         if (response.statusCode() != 200) {
-            LOG.log(Level.INFO, "Kubernetes API GET: HTTP {0}", response.statusCode());
+            LOG.log(Level.INFO, Logs.fmt("Kubernetes API GET: HTTP {0}", response.statusCode()));
             return null;
         }
         return Json.MAPPER.readTree(response.body());

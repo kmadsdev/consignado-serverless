@@ -1,5 +1,6 @@
 package dev.kmads.consignado.gateway.adapters;
 
+import dev.kmads.consignado.gateway.core.Logs;
 import com.fasterxml.jackson.databind.JsonNode;
 import dev.kmads.consignado.gateway.core.Json;
 import dev.kmads.consignado.gateway.core.PowerState;
@@ -37,13 +38,13 @@ public final class ArmClusterControl implements ClusterControl {
                     .GET().build();
             HttpResponse<String> response = Http.CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() != 200) {
-                LOG.log(Level.WARNING, "ARM get cluster: HTTP {0}", response.statusCode());
+                LOG.log(Level.WARNING, Logs.fmt("ARM get cluster: HTTP {0}", response.statusCode()));
                 return PowerState.UNKNOWN;
             }
             return parse(response.body());
         } catch (Exception e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
-            LOG.log(Level.WARNING, "ARM get cluster failed: {0}", e.getClass().getSimpleName());
+            LOG.log(Level.WARNING, Logs.fmt("ARM get cluster failed: {0}", e.getClass().getSimpleName()));
             return PowerState.UNKNOWN;
         }
     }
@@ -75,11 +76,11 @@ public final class ArmClusterControl implements ClusterControl {
                     .POST(HttpRequest.BodyPublishers.noBody()).build();
             HttpResponse<Void> response = Http.CLIENT.send(request, HttpResponse.BodyHandlers.discarding());
             int status = response.statusCode();
-            LOG.log(Level.INFO, "ARM {0} cluster: HTTP {1}", new Object[] {action, status});
+            LOG.log(Level.INFO, Logs.fmt("ARM {0} cluster: HTTP {1}", new Object[] {action, status}));
             return status == 200 || status == 202 || status == 204;
         } catch (Exception e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
-            LOG.log(Level.WARNING, "ARM {0} cluster failed: {1}", new Object[] {action, e.getClass().getSimpleName()});
+            LOG.log(Level.WARNING, Logs.fmt("ARM {0} cluster failed: {1}", new Object[] {action, e.getClass().getSimpleName()}));
             return false;
         }
     }

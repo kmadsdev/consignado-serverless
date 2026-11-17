@@ -8,9 +8,8 @@ import dev.kmads.consignado.gateway.ports.Secrets;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Supplier;
 
-/** Key Vault secrets, cached 5 minutes in memory. A missing secret is cached 1 minute. */
+/** Key Vault secrets, read-only, cached 5 minutes in memory. A missing secret is cached 1 minute. */
 public final class KeyVaultSecrets implements Secrets {
     private static final long TTL_MS = Duration.ofMinutes(5).toMillis();
     private static final long MISSING_TTL_MS = Duration.ofMinutes(1).toMillis();
@@ -37,15 +36,5 @@ public final class KeyVaultSecrets implements Secrets {
         }
         cache.put(name, new Entry(value, now + (value == null ? MISSING_TTL_MS : TTL_MS)));
         return new Read(value, false);
-    }
-
-    @Override
-    public String readOrCreate(String name, Supplier<String> generator) {
-        Read read = read(name);
-        if (read.found()) return read.value();
-        client.setSecret(name, generator.get());
-        cache.remove(name);
-        // Read again: when two instances created the secret at the same time, both use the newest version.
-        return read(name).value();
     }
 }

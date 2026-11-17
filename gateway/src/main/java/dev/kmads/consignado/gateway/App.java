@@ -68,7 +68,7 @@ public final class App {
         Secrets secrets = new KeyVaultSecrets(config.keyVaultUrl(), credential);
         Hasher hasher = new Hasher(secrets);
         BotCheck botCheck = new TurnstileBotCheck(secrets);
-        Mailer mailer = config.acsEndpoint() == null ? Mailers.auditOnly(audit)
+        Mailer mailer = config.acsEndpoint() == null || config.acsSender() == null ? Mailers.auditOnly(audit)
                 : Mailers.acs(config.acsEndpoint(), config.acsSender(), config.ownerEmail(), credential, audit);
         Upstream upstream = new HttpUpstream(config.apifnBaseUrl(), config.aksInternalUrl());
         Supplier<String> ids = App::randomId;
