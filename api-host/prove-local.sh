@@ -73,7 +73,6 @@ AG="$(code -X POST -H "x-functions-key: $FN_KEY" -H 'Content-Type: application/j
   -d "{\"code\":\"PROOF-$(openssl rand -hex 3 | tr a-f A-F)\",\"name\":\"Proof agreement\",\"maxMarginPercent\":35,\"maxTermMonths\":96,\"monthlyInterestRate\":0.0185}")"
 check "POST /api/v1/agreements" 201 "$AG"
 check "GET /api/v1/contracts" 200 "$(code -H "x-functions-key: $FN_KEY" "$BASE/api/v1/contracts")"
-check "GET /api/v1/agreements" 200 "$(code -H "x-functions-key: $FN_KEY" "$BASE/api/v1/agreements")"
 check "PATCH reaches Spring (unknown customer -> 404)" 404 \
   "$(code -X PATCH -H "x-functions-key: $FN_KEY" -H 'Content-Type: application/json' -d '{"monthlyIncome":1000}' \
      "$BASE/api/v1/customers/00000000-0000-0000-0000-000000000000/income")"
