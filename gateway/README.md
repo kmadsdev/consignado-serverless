@@ -19,14 +19,14 @@ Plain Java: no Spring, no dependency injection framework. All objects are built 
 | Method and path | Who | Result |
 |---|---|---|
 | `GET /api/health` | all | `{status:"UP"}`, a constant: no configuration, no Azure call, no edge key |
-| `GET /api/engine` | all | `Engine` |
+| `GET /api/engine` | all | `Engine` `{state, since, activeSessions, pausedReason, paused}` (see "Engine rules" for the pause combinations) |
 | `GET /api/status?host=functions\|aks` | all for `functions`; token for `aks` | `PlatformStatus` (see "Status page"); 400 for another `host` |
 | `GET /api/snapshot` | all | masked copy of shared data `{asOf, agreements, customers, contracts}` |
 | `POST /api/contact` | all + Turnstile token | `ContactRequest` (201), email to the owner. Kinds `contact` and `more-windows`. A signed-in sender is linked: the row has `userId` (null for a guest), and `GET /api/admin/contacts` shows it |
 | `GET /api/me` | token | `Me`; the first call creates the user and emails the owner |
 | `PUT /api/me/profile` | token + Turnstile token | `Profile` + `{fingerprint, turnstileToken}`; duplicate check; `Me` |
 | `POST /api/sessions` | user | `Session` (201; 200 when the user already has an active window). 409 `paused`, `held`, `blocked`, `no-windows`, `profile-incomplete`, `cooldown` (with `Retry-After`), `daily-limit` (`DAILY_WINDOWS_MAX`, default 12, new windows in any 24 hours over all accounts; the owner is not limited), `busy` (the account row changed twice at the same time) |
-| `GET /api/sessions/{id}` | owner or admin | `Session` with events. A poll also reads the real cluster signals (at most every 3 s) |
+| `GET /api/sessions/{id}` | owner or admin | `Session` with events and `requests` (proxied AKS calls of the window that the API host answered with 2xx or 3xx; one table write per call, ETag, one retry). A poll also reads the real cluster signals (at most every 3 s) |
 | `POST /api/sessions/{id}/end` | owner or admin | ends the window early: `Session` in state `ended` (200; an ended or failed session comes back unchanged). The window is not given back to the quota (a `starting` window is counted now). The timer then stops the cluster when no window is active. 404 for another user's session |
 | `GET, POST, PATCH /api/fn/{*path}` | token; guest only `POST api/v1/simulations/preview` (503 `paused` while the engine is paused for budget) | proxy to the Functions API host |
 | `GET, POST, PATCH /api/aks/{*path}` | token + own window in state `ready` | proxy to the AKS host |
@@ -56,7 +56,7 @@ Tables (made by Terraform): `users`, `sessions`, `engine`, `contacts`, `audit`. 
 
 ```bash
 cd gateway
-./mvnw -B -ntp verify     # compile, 133 tests (JUnit 5, no network), package
+./mvnw -B -ntp verify     # compile, 141 tests (JUnit 5, no network), package
 ls target/azure-functions/func-consignado-gw-km01   # the staged function app
 ```
 
@@ -69,7 +69,14 @@ A JDK 21 or newer is necessary. The tests run the real core and the real handler
 - A window is counted when it opens. A start that does not reach ready in 15 minutes becomes `failed`, costs the user nothing, and the cluster is stopped.
 - With no active window, the timer stops the cluster. Then the state is `cooldown` for `COOLDOWN_MINUTES`.
 - A cluster that something else started (for example the deploy job) gets 20 minutes before the timer stops it.
-- `paused` by the admin: new windows are refused, running windows end normally. The budget hook also ends the running windows and stops the cluster at once.
+- `paused` by the admin: new windows are refused, running windows end normally. `GET /api/engine` then shows:
+
+  | Situation | `state` | `paused` | `pausedReason` |
+  |---|---|---|---|
+  | not paused | `stopped`, `starting`, `running`, `stopping` or `cooldown` | `false` | `null` |
+  | paused, a window still runs (or starts) | `running` (or `starting`) | `true` | `admin` or `budget` |
+  | paused, no window, cluster stopped or in cooldown | `paused` | `true` | `admin` or `budget` |
+- Stage durations of a start: when the pod was made after the window was requested, the pod stages use the pod's own times: `secrets-mount` = `PodScheduled` -> `PodReadyToStartContainers` (or `Initialized`); `image-pull` = the pod events `Pulling` -> `Pulled` (0 ms and "image already on the node" when the event says "already present on machine"; "pull time not readable" when the events cannot be read); `container-start` = `Pulled` (or volumes ready) -> `containerStatuses[].state.running.startedAt`; `database` = `startedAt` -> `Ready` (or `ContainersReady`); `node` ends at `PodScheduled`. A pod older than the request (warm cluster) gives no pod durations. The budget hook also ends the running windows and stops the cluster at once.
 - The gateway can only read, start and stop the cluster. `ArmClusterControl` has no code for a delete or an update.
 
 ## Status page (`GET /api/status`)

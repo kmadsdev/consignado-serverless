@@ -15,6 +15,7 @@ import java.util.regex.Pattern;
 
 /** The rules of /api/fn/** and /api/aks/**: who may call what, what is forwarded, and the trace. */
 public final class ProxyService {
+    private static final java.util.logging.Logger LOG = java.util.logging.Logger.getLogger("consignado.gateway");
     public static final int MAX_BODY_BYTES = 64 * 1024;
     public static final String HOST_KEY = "apifn-host-key";
     public static final String GUEST_PATH = "api/v1/simulations/preview";
@@ -76,7 +77,7 @@ public final class ProxyService {
             throw ApiException.forbidden();
         }
         Instant now = clock.instant();
-        if (host == HostKind.AKS) requireOpenWindow(user, now);
+        Session window = host == HostKind.AKS ? requireOpenWindow(user, now) : null;
 
         Map<String, String> out = new LinkedHashMap<>();
         for (String name : FORWARDED) {
@@ -119,6 +120,7 @@ public final class ProxyService {
                             : "no answer from the API host (connection failed)");
         }
         long upstreamMs = ms(t);
+        if (window != null && response.status() >= 200 && response.status() < 400) countRequest(window);
         Views.RequestTrace trace = TraceBuilder.forProxy(host, now, guest, identityMs, kvMs, kvCached, kvUsed,
                 upstreamMs, response.status(), ms(startNanos));
         String contentType = response.contentType() == null ? "application/json" : response.contentType();
@@ -136,11 +138,33 @@ public final class ProxyService {
         return new Result(status, "application/json", Json.bytes(error), host, trace);
     }
 
-    private void requireOpenWindow(User user, Instant now) {
+    /**
+     * One table write per answered AKS call: requests + 1 with the ETag; on a conflict (timer or poll wrote
+     * the row) read it again once; a second conflict drops the count of this call (logged), never the answer.
+     */
+    private void countRequest(Session window) {
+        Session s = window;
+        for (int attempt = 0; attempt < 2 && s != null; attempt++) {
+            s.requests = s.requests + 1;
+            try {
+                sessions.save(s);
+                return;
+            } catch (SessionStore.ConflictException e) {
+                s = sessions.find(window.id).orElse(null);
+            } catch (RuntimeException e) {
+                LOG.warning(Logs.fmt("session {0}: request count not written: {1}", window.id, Logs.of(e)));
+                return;
+            }
+        }
+        LOG.warning(Logs.fmt("session {0}: request count not written (row changed twice)", window.id));
+    }
+
+    private Session requireOpenWindow(User user, Instant now) {
         Session session = user.activeSessionId == null ? null : sessions.find(user.activeSessionId).orElse(null);
         boolean open = session != null && session.userId.equals(user.id) && Session.READY.equals(session.state)
                 && session.expiresAt != null && now.isBefore(session.expiresAt);
         if (!open) throw new ApiException(403, "no-session", "An open access window is required for this host");
+        return session;
     }
 
     static String cleanPath(String rawPath) {

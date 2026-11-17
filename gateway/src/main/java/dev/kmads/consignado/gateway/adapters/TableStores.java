@@ -217,6 +217,7 @@ public final class TableStores {
                 put(e, "lastObservedAt", Times.iso(s.lastObservedAt));
                 put(e, "events", Json.string(s.events));
                 put(e, "open", s.open);
+                put(e, "requests", s.requests);
                 try {
                     Response<Void> response;
                     if (s.etag == null) {
@@ -263,6 +264,7 @@ public final class TableStores {
         s.endedAt = time(e, "endedAt");
         s.lastObservedAt = time(e, "lastObservedAt");
         s.open = bool(e, "open");
+        s.requests = num(e, "requests");
         s.etag = e.getETag();
         try {
             s.events = new ArrayList<>(Json.MAPPER.readValue(strOr(e, "events", "[]"),

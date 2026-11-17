@@ -18,11 +18,15 @@ public final class Views {
                             int windowMinutes) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record Engine(String state, String since, int activeSessions, String pausedReason) {}
+    /**
+     * paused is true whenever new windows are paused, also while a window still runs (state then stays
+     * "running" or "starting"; running windows end normally).
+     */
+    public record Engine(String state, String since, int activeSessions, String pausedReason, boolean paused) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record SessionView(String id, String userId, String state, String requestedAt, String readyAt,
-                              String expiresAt, List<LifecycleEvent> events) {}
+                              String expiresAt, List<LifecycleEvent> events, int requests) {}
 
     public record Budget(double limitUsd, double spentUsd, String asOf) {}
 
@@ -59,6 +63,6 @@ public final class Views {
 
     public static SessionView session(Session s) {
         return new SessionView(s.id, s.userId, s.state, Times.iso(s.requestedAt), Times.iso(s.readyAt),
-                Times.iso(s.expiresAt), List.copyOf(s.events));
+                Times.iso(s.expiresAt), List.copyOf(s.events), s.requests);
     }
 }
