@@ -38,6 +38,32 @@ Plain Java: no Spring, no dependency injection framework. All objects are built 
 
 Errors are `{code, message}`. On an upstream failure the failed stage of the trace has `status: "error"` and a short `detail` (`upstream answered 503`, `timeout after 30 s` (Functions) / `10 s` (AKS), `no answer from the API host (connection failed)`, `function key not found in Key Vault` on stage `keyvault`), and the error answer still carries `x-consignado-trace`. The proxy returns the status and the JSON of the API host unchanged, plus `x-consignado-host` and `x-consignado-trace` (base64url JSON `RequestTrace`). `cold` is true only for the Functions host and only when the upstream call took more than 8 s; the AKS host never reports `cold`.
 
+### Request trace (`x-consignado-trace`)
+
+`RequestTrace = {host, cold, totalMs, events[], api?}`. Every event has `ts`, `stage`, `status`, `detail` and `ms` when the stage has its own time. **The `ms` values of a trace add up to `totalMs`** (a missing `ms` counts as 0; tested over all hosts, guests, failures and header cases).
+
+| Host | Stages, in order |
+|---|---|
+| `functions` | `request`, `edge`, `gateway`, `identity`, `keyvault`, [`function-cold-start`, `jvm-start` only when cold], `functions-host`, `app`, [`database`], `response` |
+| `aks` | `request`, `edge`, `gateway`, `identity`, `quota`, `keyvault`, `load-balancer`, `app`, [`database`], `response` |
+
+| Stage | `ms` |
+|---|---|
+| `gateway` | total minus identity, Key Vault and upstream time (the gateway's own work) |
+| `identity` | token check. **Left out for a guest** (no token), not shown as 0 ms |
+| `keyvault` | Functions: the function key read; `0` with detail `cached` when no Key Vault read happened. AKS: `0`, "not needed for this host" |
+| `function-cold-start` | only when cold (upstream above 8 s): upstream time minus `appMs` (the whole upstream time without the API header); `jvm-start` and `functions-host` then have no own `ms` |
+| `functions-host` / `load-balancer` | upstream time minus `appMs`, never below 0: network, Functions host or internal load balancer, and the way back |
+| `app` | `appMs - db.ms`; detail `Spring Boot handled the request in <instance>` |
+| `database` | only when `db.statements > 0`: `db.ms`; detail `3 statements: 2 select, 1 insert` (kinds with 0 left out) |
+| `response` | no `ms` when `app` is present; the upstream time when the API sent no valid header (as before addendum 2) |
+
+`api` is the parsed `X-Consignado-Timing` response header of the API host (`{instance, appMs, db: {ms, statements, select, insert, update, delete, other, connectionMs, transactions} | null}`), absent when the header is missing or not valid. Then the trace has no `functions-host` (Functions), no `app`, no `database`, and `response` carries the upstream time.
+
+Validation of `X-Consignado-Timing` (input from another service; on any doubt it is ignored and the trace is built without it): at most 1024 characters; a JSON object; `instance` 1 to 80 characters of `[A-Za-z0-9._-]`; `appMs`, `db.ms`, `db.connectionMs` numbers from 0 to 60000; the counts whole numbers from 0 to 10000; `select + insert + update + delete + other = statements`; `db.ms <= appMs + 1`; `appMs <= upstream time + 2 ms`; unknown fields are dropped. The header is not used for an upstream error (5xx, timeout, no connection): then the host stage (`functions-host` or `load-balancer`) has `status: "error"`, the short detail and the upstream time, `response` is `error` too, and there is no `app` or `database`.
+
+The gateway reads only `Content-Type` and `X-Consignado-Timing` from the upstream answer. No upstream header (also not `X-Consignado-Timing` or `Server-Timing`) goes to the browser; the browser gets the data only inside `x-consignado-trace`.
+
 ## Configuration (environment variables, names only)
 
 Required: `AZURE_CLIENT_ID`, `ENTRA_TENANT_ID`, `ENTRA_API_AUDIENCE`, `ADMIN_OID`, `AKS_RESOURCE_ID`, `AKS_API_SERVER_URL`, `AKS_CA_CERT_B64`, `AKS_INTERNAL_URL`, `APIFN_BASE_URL`, `KEY_VAULT_URL`, `STORAGE_ACCOUNT`, `OWNER_EMAIL`, `WINDOW_MINUTES`, `WINDOWS_MAX`, `COOLDOWN_MINUTES`, `BUDGET_LIMIT_USD`.
@@ -95,6 +121,8 @@ Order: `functions`: edge, gateway, identity, keyvault, functions, database. `aks
 | cluster | ARM power state (existing role) | Running = up, Starting = starting, else stopped |
 | load-balancer | the gateway's own `GET /actuator/health/readiness` to 10.10.3.200, metric `latency-avg` "now" | 200 = up, else down; not called when the cluster is not running |
 | node, pods | Kubernetes API (existing reader role: pods, endpoints, `apps/deployments`, `horizontalpodautoscalers`), node metrics | all Ready = up, some = degraded, none = down; pods detail: ready count, restarts, image tag, age of the newest pod, Deployment ready/desired replicas (fewer ready than desired = degraded), HPA current/desired (min to max); `replicas` = the Deployment's ready replicas, or the ready pods when the Deployment cannot be read; no call when the cluster is not running |
+
+`build` (optional on a `ServiceStatus`): `{commit, repository}`. The `pods` service carries it when the image tag of the API container (`consignado-api`) in the newest Ready pod (any live pod when none is Ready) is a git commit (7 to 40 lower-case hex characters) of `kmadsdev/consignado-api`. A tag like `latest` gives no `build`. The `functions` service has no `build`: no data the gateway reads holds the commit of the Functions host.
 
 Metric table (names checked with `az monitor metrics list-definitions` on 2026-11-17; the code table is `core/StatusMetrics.java`):
 

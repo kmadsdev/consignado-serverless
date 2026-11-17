@@ -122,7 +122,7 @@ public final class ProxyService {
         long upstreamMs = ms(t);
         if (window != null && response.status() >= 200 && response.status() < 400) countRequest(window);
         Views.RequestTrace trace = TraceBuilder.forProxy(host, now, guest, identityMs, kvMs, kvCached, kvUsed,
-                upstreamMs, response.status(), ms(startNanos));
+                upstreamMs, response.status(), ms(startNanos), null, ApiTiming.parse(response.timing()));
         String contentType = response.contentType() == null ? "application/json" : response.contentType();
         return new Result(response.status(), contentType, response.body() == null ? new byte[0] : response.body(),
                 host, trace);

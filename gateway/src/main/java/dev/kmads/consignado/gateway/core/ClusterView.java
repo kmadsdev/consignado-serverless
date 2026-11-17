@@ -44,6 +44,15 @@ public record ClusterView(boolean apiServerUp, List<Node> nodes, List<Pod> pods,
 
         public boolean running() { return "running".equals(state); }
 
+        /** The image name without registry and tag ("cr.io/consignado-api:abc123" -> "consignado-api"), or null. */
+        public String imageName() {
+            if (image == null) return null;
+            String noDigest = image.contains("@") ? image.substring(0, image.indexOf('@')) : image;
+            int slash = noDigest.lastIndexOf('/');
+            int colon = noDigest.lastIndexOf(':');
+            return noDigest.substring(slash + 1, colon > slash ? colon : noDigest.length());
+        }
+
         /** The tag of the image ("consignado-api:abc123" -> "abc123"), or null. */
         public String imageTag() {
             if (image == null) return null;
