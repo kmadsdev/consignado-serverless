@@ -32,21 +32,44 @@ public final class ArmClusterControl implements ClusterControl {
     @Override
     public PowerState powerState() {
         try {
-            HttpRequest request = HttpRequest.newBuilder(URI.create(ARM + resourceId + "?api-version=" + API_VERSION))
-                    .timeout(Duration.ofSeconds(10))
-                    .header("Authorization", "Bearer " + tokens.token(AzureTokens.ARM_SCOPE))
-                    .GET().build();
+            HttpRequest request = getRequest(resourceId, tokens.token(AzureTokens.ARM_SCOPE));
             HttpResponse<String> response = Http.CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() != 200) {
                 LOG.log(Level.WARNING, Logs.fmt("ARM get cluster: HTTP {0}", response.statusCode()));
                 return PowerState.UNKNOWN;
             }
-            return parse(response.body());
+            PowerState state = parse(response.body());
+            LOG.log(Level.INFO, Logs.fmt("ARM get cluster: power {0}, provisioning {1}", state.code(), state.provisioning()));
+            return state;
         } catch (Exception e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
-            LOG.log(Level.WARNING, Logs.fmt("ARM get cluster failed: {0}", e.getClass().getSimpleName()));
+            LOG.log(Level.WARNING, Logs.fmt("ARM get cluster failed: {0}", Logs.of(e)));
             return PowerState.UNKNOWN;
         }
+    }
+
+    static HttpRequest getRequest(String resourceId, String token) {
+        return HttpRequest.newBuilder(URI.create(ARM + resourceId + "?api-version=" + API_VERSION))
+                .timeout(Duration.ofSeconds(10))
+                .header("Authorization", "Bearer " + token)
+                .header("Accept", "application/json")
+                .GET().build();
+    }
+
+    /**
+     * POST {id}/start or {id}/stop with an empty body. Two live defects of 2026-11-17 are fixed here:
+     * 1. java.net.http refuses the header Content-Length from the caller (IllegalArgumentException).
+     * 2. With HTTP/2 the client sends no Content-Length for an empty body, and ARM answers 411.
+     *    With HTTP/1.1 the client itself sends "Content-Length: 0".
+     */
+    static HttpRequest actionRequest(String resourceId, String action, String token) {
+        if (!action.equals("start") && !action.equals("stop")) throw new IllegalArgumentException("action");
+        return HttpRequest.newBuilder(URI.create(ARM + resourceId + "/" + action + "?api-version=" + API_VERSION))
+                .version(java.net.http.HttpClient.Version.HTTP_1_1)
+                .timeout(Duration.ofSeconds(20))
+                .header("Authorization", "Bearer " + token)
+                .header("Accept", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofByteArray(new byte[0])).build();
     }
 
     static PowerState parse(String body) throws Exception {
@@ -68,19 +91,14 @@ public final class ArmClusterControl implements ClusterControl {
 
     private boolean post(String action) {
         try {
-            HttpRequest request = HttpRequest
-                    .newBuilder(URI.create(ARM + resourceId + "/" + action + "?api-version=" + API_VERSION))
-                    .timeout(Duration.ofSeconds(20))
-                    .header("Authorization", "Bearer " + tokens.token(AzureTokens.ARM_SCOPE))
-                    .header("Content-Length", "0")
-                    .POST(HttpRequest.BodyPublishers.noBody()).build();
+            HttpRequest request = actionRequest(resourceId, action, tokens.token(AzureTokens.ARM_SCOPE));
             HttpResponse<Void> response = Http.CLIENT.send(request, HttpResponse.BodyHandlers.discarding());
             int status = response.statusCode();
             LOG.log(Level.INFO, Logs.fmt("ARM {0} cluster: HTTP {1}", new Object[] {action, status}));
             return status == 200 || status == 202 || status == 204;
         } catch (Exception e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
-            LOG.log(Level.WARNING, Logs.fmt("ARM {0} cluster failed: {1}", new Object[] {action, e.getClass().getSimpleName()}));
+            LOG.log(Level.WARNING, Logs.fmt("ARM {0} cluster failed: {1}", action, Logs.of(e)));
             return false;
         }
     }

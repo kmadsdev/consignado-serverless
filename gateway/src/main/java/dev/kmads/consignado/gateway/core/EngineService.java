@@ -25,6 +25,7 @@ public final class EngineService {
     private static final Duration OBSERVE_EVERY = Duration.ofSeconds(3);
     private static final Duration START_RETRY_AFTER = Duration.ofMinutes(2);
     private static final String CLUSTER = "aks-consignado";
+    private static final java.util.logging.Logger LOG = java.util.logging.Logger.getLogger("consignado.gateway");
 
     public record WindowResult(Session session, boolean created) {}
 
@@ -415,12 +416,16 @@ public final class EngineService {
             }
         }
         if (!all) {
+            LifecycleEvent waitingAt = s.lastEvent();
+            LOG.info(Logs.fmt("session {0}: waits at stage {1}: {2}", s.id, waitingAt.stage(), waitingAt.detail()));
             save(s);
             return false;
         }
 
         // The last proof is a real call through the internal load balancer.
         int status = signals.probe();
+        LOG.info(Logs.fmt("session {0}: readiness call through the internal load balancer: HTTP {1} in {2} ms",
+                s.id, status, signals.probeMs));
         if (status != 200) {
             s.addOnce(now, Stages.LOAD_BALANCER, LifecycleEvent.ACTIVE,
                     status == 0 ? "no answer from the internal load balancer yet" : "readiness answered HTTP " + status);

@@ -34,7 +34,7 @@ Plain Java: no Spring, no dependency injection framework. All objects are built 
 | `POST /api/hooks/budget` | function key | pauses (reason `budget`) and stops the cluster |
 | timer `reaper`, every minute | - | advances sessions, ends windows, stops the idle cluster, refreshes the snapshot every 10 minutes |
 
-Errors are `{code, message}`. The proxy returns the status and the JSON of the API host unchanged, plus `x-consignado-host` and `x-consignado-trace` (base64url JSON `RequestTrace`).
+Errors are `{code, message}`. The proxy returns the status and the JSON of the API host unchanged, plus `x-consignado-host` and `x-consignado-trace` (base64url JSON `RequestTrace`). `cold` is true only for the Functions host and only when the upstream call took more than 8 s; the AKS host never reports `cold`.
 
 ## Configuration (environment variables, names only)
 
