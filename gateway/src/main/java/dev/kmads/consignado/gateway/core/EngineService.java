@@ -69,7 +69,8 @@ public final class EngineService {
             state = EngineRecord.PAUSED;
         }
         Instant since = rec.since == null ? clock.instant() : rec.since;
-        return new Views.Engine(state, Times.iso(since), rec.activeSessions, rec.paused ? rec.pausedReason : null);
+        return new Views.Engine(state, Times.iso(since), rec.activeSessions, rec.paused ? rec.pausedReason : null,
+                rec.paused);
     }
 
     // ------------------------------------------------------------ POST /sessions
@@ -388,6 +389,12 @@ public final class EngineService {
         private Integer probeStatus;
         private long probeMs;
         private boolean startSent;
+        private java.util.Optional<ClusterView.ImagePull> imagePull;
+
+        ClusterView.ImagePull imagePull(String podName) {
+            if (imagePull == null) imagePull = observer.imagePull(podName);
+            return imagePull.orElse(null);
+        }
 
         PowerState power() {
             if (power == null) power = cluster.powerState();
@@ -415,7 +422,17 @@ public final class EngineService {
         }
     }
 
-    private record Step(String stage, boolean satisfied, String doneDetail, String waitDetail, boolean error) {}
+    /** ms: the real duration from the pod's own times; null = the time since the stage before (as before). */
+    private record Step(String stage, boolean satisfied, String doneDetail, String waitDetail, boolean error, Long ms) {
+        Step(String stage, boolean satisfied, String doneDetail, String waitDetail, boolean error) {
+            this(stage, satisfied, doneDetail, waitDetail, error, null);
+        }
+    }
+
+    /** Milliseconds from a to b, or null when one is unknown or b is before a. */
+    private static Long between(Instant a, Instant b) {
+        return a == null || b == null || b.isBefore(a) ? null : Duration.between(a, b).toMillis();
+    }
 
     /** Records what the real signals show for a starting session. Returns true when the window opened. */
     private boolean advance(Session s, Signals signals, Instant now, boolean mayStart) {
@@ -456,20 +473,49 @@ public final class EngineService {
                 : "pod " + podName + (reason == null ? " is " + (pod.scheduled() ? "scheduled" : "not scheduled") : ": " + reason);
         boolean podReady = pod != null && pod.ready();
 
+        // A pod made for this start has its own times: they give the real durations of the pod stages, also
+        // when one observation sees several stages done. A pod older than the request ran before: no durations.
+        boolean freshPod = pod != null && pod.createdAt() != null && s.requestedAt != null
+                && !pod.createdAt().isBefore(s.requestedAt.minusSeconds(5));
+        ClusterView.PodTimes pt = freshPod ? pod.times() : ClusterView.PodTimes.NONE;
+        Long volumesMs = between(pt.scheduled(), pt.volumesReady());
+        String pullDetail = "image present for pod " + podName;
+        Long pullMs = null;
+        Instant pulledAt = null;
+        if (freshPod && pod.imagePulled() && !s.done(Stages.IMAGE_PULL)) {
+            ClusterView.ImagePull pull = signals.imagePull(podName);
+            if (pull != null && pull.alreadyPresent()) {
+                pullDetail = "image already on the node";
+                pullMs = 0L;
+            } else if (pull != null && between(pull.pullingAt(), pull.pulledAt()) != null) {
+                pullMs = between(pull.pullingAt(), pull.pulledAt());
+                pulledAt = pull.pulledAt();
+                pullDetail = "image pulled for pod " + podName;
+            } else {
+                pullDetail = "image present for pod " + podName + " (pull time not readable)";
+                pullMs = 0L;
+            }
+        }
+        Long containerMs = between(pulledAt != null ? pulledAt : pt.volumesReady(), pt.containerRunning());
+        Long databaseMs = between(pt.containerRunning(), pt.ready() != null ? pt.ready() : pt.containersReady());
+        Long nodeMs = null;
+        LifecycleEvent lastDone = lastDone(s);
+        if (pt.scheduled() != null && lastDone != null) nodeMs = between(Instant.parse(lastDone.ts()), pt.scheduled());
+
         List<Step> steps = new ArrayList<>();
         steps.add(new Step(Stages.CONTROL_PLANE, view.apiServerUp(), "Kubernetes API server answered",
                 "waiting for the Kubernetes API server", false));
         steps.add(new Step(Stages.NODE, node != null, node == null ? "" : "node " + node.name() + " is Ready",
-                view.nodes().isEmpty() ? "no node yet" : "node " + view.nodes().get(0).name() + " is not Ready", false));
-        steps.add(new Step(Stages.IMAGE_PULL, pod != null && pod.imagePulled(), "image present for pod " + podName,
-                podWait, pullError));
+                view.nodes().isEmpty() ? "no node yet" : "node " + view.nodes().get(0).name() + " is not Ready", false,
+                nodeMs));
+        steps.add(new Step(Stages.IMAGE_PULL, pod != null && pod.imagePulled(), pullDetail, podWait, pullError, pullMs));
         steps.add(new Step(Stages.SECRETS_MOUNT, pod != null && pod.volumesMounted(),
-                "volumes mounted in pod " + podName + " (CSI secret store)", podWait, false));
+                "volumes mounted in pod " + podName + " (CSI secret store)", podWait, false, volumesMs));
         steps.add(new Step(Stages.CONTAINER_START, pod != null && pod.containersStarted(),
                 "container " + (pod == null ? "" : pod.firstContainer()) + " runs in pod " + podName, podWait,
-                startError));
+                startError, containerMs));
         steps.add(new Step(Stages.DATABASE, podReady, "pod " + podName + " passed its readiness check (database included)",
-                "pod " + podName + " starts Spring Boot and connects to PostgreSQL", false));
+                "pod " + podName + " starts Spring Boot and connects to PostgreSQL", false, databaseMs));
         steps.add(new Step(Stages.READINESS, podReady && view.readyEndpoints() > 0,
                 view.readyEndpoints() + " ready endpoint(s) behind Service consignado-api",
                 "pod " + podName + " is Ready; waiting for the Service endpoints", false));
@@ -478,7 +524,8 @@ public final class EngineService {
         for (Step step : steps) {
             if (s.done(step.stage())) continue;
             if (step.satisfied()) {
-                s.add(now, step.stage(), LifecycleEvent.DONE, step.doneDetail(), since(s, now));
+                s.add(now, step.stage(), LifecycleEvent.DONE, step.doneDetail(),
+                        step.ms() != null ? step.ms() : since(s, now));
             } else {
                 s.addOnce(now, step.stage(), step.error() ? LifecycleEvent.ERROR : LifecycleEvent.ACTIVE,
                         step.waitDetail());
@@ -519,6 +566,13 @@ public final class EngineService {
         // The window is counted only now: a start that fails costs the user nothing.
         UserRows.updateQuietly(users, s.userId, u -> u.windowsUsed = u.windowsUsed + 1, "window count");
         return true;
+    }
+
+    private static LifecycleEvent lastDone(Session s) {
+        for (int i = s.events.size() - 1; i >= 0; i--) {
+            if (LifecycleEvent.DONE.equals(s.events.get(i).status())) return s.events.get(i);
+        }
+        return null;
     }
 
     /** Milliseconds from the newest finished stage to now: the duration of the stage that ends now. */

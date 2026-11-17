@@ -87,6 +87,21 @@ public final class KubeClusterObserver implements ClusterObserver {
         }
     }
 
+    /** The events of one pod (the reader role can read events of the namespace). */
+    @Override
+    public java.util.Optional<ClusterView.ImagePull> imagePull(String podName) {
+        try {
+            if (!podName.matches("[a-z0-9.\\-]{1,253}")) return java.util.Optional.empty();
+            JsonNode events = get("/api/v1/namespaces/" + NAMESPACE + "/events?fieldSelector=involvedObject.name%3D"
+                    + podName, tokens.token(AzureTokens.AKS_SCOPE));
+            return events == null ? java.util.Optional.empty() : java.util.Optional.of(KubeParser.imagePull(events));
+        } catch (Exception e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            LOG.log(Level.WARNING, Logs.fmt("Kubernetes events read failed: {0}", Logs.of(e)));
+            return java.util.Optional.empty();
+        }
+    }
+
     /** Role "Azure Kubernetes Service RBAC Reader" allows apps/deployments/read and autoscaling/hpa/read. */
     @Override
     public java.util.Optional<ClusterView.Workload> workload() {

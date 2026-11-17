@@ -56,7 +56,8 @@ final class KubeParser {
                     condition(item, "Ready"),
                     containers,
                     dev.kmads.consignado.gateway.core.Times.parse(
-                            item.path("metadata").path("creationTimestamp").asText(null))));
+                            item.path("metadata").path("creationTimestamp").asText(null)),
+                    times(item)));
         }
         return out;
     }
@@ -90,6 +91,54 @@ final class KubeParser {
             }
         }
         return count;
+    }
+
+    static ClusterView.PodTimes times(JsonNode item) {
+        java.time.Instant running = null;
+        for (JsonNode cs : item.path("status").path("containerStatuses")) {
+            java.time.Instant t = time(cs.path("state").path("running").path("startedAt").asText(null));
+            if (t != null && (running == null || t.isAfter(running))) running = t;
+        }
+        return new ClusterView.PodTimes(time(item.path("status").path("startTime").asText(null)),
+                since(item, "PodScheduled"), since(item, "PodReadyToStartContainers"), since(item, "Initialized"),
+                since(item, "ContainersReady"), since(item, "Ready"), running);
+    }
+
+    /** lastTransitionTime of a condition that is True, or null. */
+    private static java.time.Instant since(JsonNode item, String type) {
+        for (JsonNode c : item.path("status").path("conditions")) {
+            if (type.equals(c.path("type").asText()) && "True".equals(c.path("status").asText())) {
+                return time(c.path("lastTransitionTime").asText(null));
+            }
+        }
+        return null;
+    }
+
+    private static java.time.Instant time(String text) {
+        try {
+            return dev.kmads.consignado.gateway.core.Times.parse(text);
+        } catch (java.time.DateTimeException e) {
+            return null;
+        }
+    }
+
+    /** EventList of one pod: the newest Pulling and Pulled events, or "already present on machine". */
+    static ClusterView.ImagePull imagePull(JsonNode events) {
+        boolean present = false;
+        java.time.Instant pulling = null;
+        java.time.Instant pulled = null;
+        for (JsonNode e : events.path("items")) {
+            String reason = e.path("reason").asText("");
+            java.time.Instant t = time(e.path("eventTime").asText(null));
+            if (t == null) t = time(e.path("lastTimestamp").asText(null));
+            if (t == null) t = time(e.path("firstTimestamp").asText(null));
+            if (reason.equals("Pulling") && t != null && (pulling == null || t.isAfter(pulling))) pulling = t;
+            if (reason.equals("Pulled")) {
+                if (e.path("message").asText("").contains("already present on machine")) present = true;
+                else if (t != null && (pulled == null || t.isAfter(pulled))) pulled = t;
+            }
+        }
+        return new ClusterView.ImagePull(present && pulled == null, pulling, pulled);
     }
 
     private static boolean condition(JsonNode item, String type) {

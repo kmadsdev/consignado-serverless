@@ -7,6 +7,10 @@ public interface ClusterObserver {
     ClusterView observe();
 
     /** Deployments and HorizontalPodAutoscalers of namespace consignado. Empty when not readable. Never throws. */
+    default java.util.Optional<ClusterView.ImagePull> imagePull(String podName) {
+        return java.util.Optional.empty();
+    }
+
     default java.util.Optional<ClusterView.Workload> workload() {
         return java.util.Optional.empty();
     }

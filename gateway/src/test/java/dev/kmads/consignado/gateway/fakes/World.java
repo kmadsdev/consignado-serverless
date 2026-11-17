@@ -72,6 +72,7 @@ public final class World {
             c.id = s.id; c.userId = s.userId; c.state = s.state; c.requestedAt = s.requestedAt;
             c.readyAt = s.readyAt; c.expiresAt = s.expiresAt; c.endedAt = s.endedAt;
             c.lastObservedAt = s.lastObservedAt; c.events = new ArrayList<>(s.events); c.open = s.open; c.etag = s.etag;
+            c.requests = s.requests;
             return c;
         }
         @Override public Optional<Session> find(String id) { return Optional.ofNullable(rows.get(id)).map(Sessions::copy); }
@@ -95,6 +96,9 @@ public final class World {
         public int stops;
         public int observations;
         public Optional<ClusterView.Workload> workload = Optional.empty();
+        public Optional<ClusterView.ImagePull> imagePull = Optional.empty();
+        public int imagePullReads;
+        @Override public Optional<ClusterView.ImagePull> imagePull(String pod) { imagePullReads++; return imagePull; }
         @Override public Optional<ClusterView.Workload> workload() { return workload; }
         @Override public PowerState powerState() { return power; }
         @Override public boolean start() { starts++; if (accept) power = new PowerState("Running", "Starting"); return accept; }
