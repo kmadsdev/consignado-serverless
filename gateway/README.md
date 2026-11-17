@@ -21,18 +21,19 @@ Plain Java: no Spring, no dependency injection framework. All objects are built 
 | `GET /api/health` | all | `{status:"UP"}`, a constant: no configuration, no Azure call, no edge key |
 | `GET /api/engine` | all | `Engine` |
 | `GET /api/snapshot` | all | masked copy of shared data `{asOf, agreements, customers, contracts}` |
-| `POST /api/contact` | all + Turnstile token | `ContactRequest` (201), email to the owner |
+| `POST /api/contact` | all + Turnstile token | `ContactRequest` (201), email to the owner. Kinds `contact` and `more-windows`. A signed-in sender is linked: the row has `userId` (null for a guest), and `GET /api/admin/contacts` shows it |
 | `GET /api/me` | token | `Me`; the first call creates the user and emails the owner |
 | `PUT /api/me/profile` | token + Turnstile token | `Profile` + `{fingerprint, turnstileToken}`; duplicate check; `Me` |
 | `POST /api/sessions` | user | `Session` (201; 200 when the user already has an active window). 409 `paused`, `held`, `blocked`, `no-windows`, `profile-incomplete`, `cooldown` (with `Retry-After`) |
 | `GET /api/sessions/{id}` | owner or admin | `Session` with events. A poll also reads the real cluster signals (at most every 3 s) |
+| `POST /api/sessions/{id}/end` | owner or admin | ends the window early: `Session` in state `ended` (200; an ended or failed session comes back unchanged). The window is not given back to the quota (a `starting` window is counted now). The timer then stops the cluster when no window is active. 404 for another user's session |
 | `GET, POST, PATCH /api/fn/{*path}` | token; guest only `POST api/v1/simulations/preview` | proxy to the Functions API host |
 | `GET, POST, PATCH /api/aks/{*path}` | token + own window in state `ready` | proxy to the AKS host |
-| `GET /api/admin/users`, `POST /api/admin/users/{id}` | admin | `AdminUser[]` / `AdminUser`; actions `approve`, `hold`, `block`, `grant` (`windows` 1 to 20, default 1, added to the maximum) |
+| `GET /api/admin/users`, `POST /api/admin/users/{id}` | admin | `AdminUser[]` / `AdminUser`; actions `approve`, `hold`, `block`, `grant` (`windows` 1 to 20, default 1, added to the maximum), `delete` (see "Personal data") |
 | `GET /api/admin/sessions`, `/state`, `/contacts` | admin | `Session[]`, `AdminState`, `ContactRequest[]` |
 | `POST /api/admin/pause` `{paused}`, `POST /api/admin/engine/stop` | admin | `AdminState` |
 | `POST /api/hooks/budget` | function key | pauses (reason `budget`) and stops the cluster |
-| timer `reaper`, every minute | - | advances sessions, ends windows, stops the idle cluster, refreshes the snapshot every 10 minutes |
+| timer `reaper`, every minute | - | advances sessions, ends windows, stops the idle cluster, refreshes the snapshot every 10 minutes, runs the retention job once per day |
 
 Errors are `{code, message}`. The proxy returns the status and the JSON of the API host unchanged, plus `x-consignado-host` and `x-consignado-trace` (base64url JSON `RequestTrace`). `cold` is true only for the Functions host and only when the upstream call took more than 8 s; the AKS host never reports `cold`.
 
@@ -52,7 +53,7 @@ Tables (made by Terraform): `users`, `sessions`, `engine`, `contacts`, `audit`. 
 
 ```bash
 cd gateway
-./mvnw -B -ntp verify     # compile, 77 tests (JUnit 5, no network), package
+./mvnw -B -ntp verify     # compile, 100 tests (JUnit 5, no network), package
 ls target/azure-functions/func-consignado-gw-km01   # the staged function app
 ```
 
@@ -67,6 +68,19 @@ A JDK 21 or newer is necessary. The tests run the real core and the real handler
 - A cluster that something else started (for example the deploy job) gets 20 minutes before the timer stops it.
 - `paused` by the admin: new windows are refused, running windows end normally. The budget hook also ends the running windows and stops the cluster at once.
 - The gateway can only read, start and stop the cluster. `ArmClusterControl` has no code for a delete or an update.
+
+## Personal data: retention and deletion
+
+- **Retention (timer, at most once per day; the time of the last run is `lastRetentionAt` in the engine row):**
+  - `audit` rows of a day older than 90 days are deleted (the partition key is the day).
+  - An account with no activity for 12 months (`lastSeenAt`, or `createdAt` when `lastSeenAt` is empty) is deleted: its `users` row, its `sessions` rows, and its `contacts` rows (same email or same `userId`). One audit row per account: `who: system`, `action: retention-delete`, `target: <HMAC-SHA256 of the user id>`. The owner account and an account with an active window are kept.
+  - The time is written before the job runs: a failed job runs again the next day, not each minute. Each run writes one log line `retention: N audit rows deleted, M inactive accounts deleted`.
+- **Deletion on request (LGPD article 18):** `POST /api/admin/users/{id}` `{"action":"delete"}` (admin only; `DELETE` is blocked at the edge by design). It deletes the same rows as above and writes one audit row `admin.user.delete` with the hash as the target. Answer: `{"deleted": true, "entraAccount": "delete it in the Entra admin center"}`: the gateway has no directory rights, so the owner deletes the Entra ID guest account by hand. The admin cannot delete his own account (409 `self-delete`). An open window of the user ends with its row; the timer then stops the cluster.
+- Audit rows written before a deletion keep the user id as `who`/`target` until the 90-day retention removes them (security log).
+
+## Owner mail
+
+`Mailers.acs` sends with the managed identity (role `Communication and Email Service Owner` on `acs-consignado-km01`) from `EMAIL_SENDER` (the `DoNotReply` address of the Azure-managed domain) to `OWNER_EMAIL`. `GuardedMailer` wraps it: every send leaves one log line (`mail to the owner accepted by ACS: <subject>` or `mail to the owner failed: <subject>: <error class and message, addresses removed>`) and one audit row (`mail.sent` / `mail.failed`). A failed mail never fails the request. The ACS client is built at the first mail. Delivery is visible in the ACS metric `DeliveryStatusUpdate`.
 
 ## Security decisions and their trade-offs
 
