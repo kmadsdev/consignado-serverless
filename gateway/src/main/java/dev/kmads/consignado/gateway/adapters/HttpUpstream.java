@@ -1,6 +1,8 @@
 package dev.kmads.consignado.gateway.adapters;
 
 import dev.kmads.consignado.gateway.core.HostKind;
+import dev.kmads.consignado.gateway.core.Logs;
+import java.util.logging.Level;
 import dev.kmads.consignado.gateway.ports.Upstream;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -11,6 +13,7 @@ import java.time.Duration;
 
 /** The HTTP client for the two API hosts. Connect 5 s; total 30 s for Functions (cold start), 10 s for AKS. */
 public final class HttpUpstream implements Upstream {
+    private static final java.util.logging.Logger LOG = java.util.logging.Logger.getLogger("consignado.gateway");
     private static final Duration FUNCTIONS_TIMEOUT = Duration.ofSeconds(30);
     private static final Duration AKS_TIMEOUT = Duration.ofSeconds(10);
 
@@ -40,11 +43,13 @@ public final class HttpUpstream implements Upstream {
             return new Response(response.statusCode(),
                     response.headers().firstValue("content-type").orElse(null), response.body());
         } catch (HttpTimeoutException e) {
+            LOG.log(Level.WARNING, Logs.fmt("upstream {0} {1} timeout: {2}", request.host().id(), request.path(), Logs.of(e)));
             throw new UpstreamException(true);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new UpstreamException(false);
         } catch (Exception e) {
+            LOG.log(Level.WARNING, Logs.fmt("upstream {0} {1} failed: {2}", request.host().id(), request.path(), Logs.of(e)));
             throw new UpstreamException(false);
         }
     }

@@ -52,6 +52,40 @@ class ParsersTest {
     }
 
     @Test
+    void armRequestsAreBuiltWithoutRestrictedHeaders() {
+        String id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-consignado"
+                + "/providers/Microsoft.ContainerService/managedClusters/aks-consignado";
+        for (String action : new String[] {"start", "stop"}) {
+            java.net.http.HttpRequest r = ArmClusterControl.actionRequest(id, action, "token-value");
+            assertEquals("POST", r.method());
+            assertEquals("https://management.azure.com" + id + "/" + action + "?api-version=2024-09-01", r.uri().toString());
+            assertEquals("Bearer token-value", r.headers().firstValue("Authorization").orElseThrow());
+            assertEquals(java.util.Set.of("Accept", "Authorization"), r.headers().map().keySet(),
+                    "Content-Length is set by the HTTP client, never by this code");
+            assertEquals(0L, r.bodyPublisher().orElseThrow().contentLength(), "an empty body, but a body publisher");
+            assertEquals(java.net.http.HttpClient.Version.HTTP_1_1, r.version().orElseThrow(),
+                    "HTTP/1.1: the client sends Content-Length: 0 (ARM answers 411 without it)");
+        }
+        assertThrows(IllegalArgumentException.class, () -> ArmClusterControl.actionRequest(id, "delete", "t"));
+        java.net.http.HttpRequest get = ArmClusterControl.getRequest(id, "token-value");
+        assertEquals("GET", get.method());
+        assertEquals("https://management.azure.com" + id + "?api-version=2024-09-01", get.uri().toString());
+    }
+
+    @Test
+    void nodeComesFromThePodsWhenTheNodeListIsForbidden() {
+        ClusterView.Container running = new ClusterView.Container("api", "running", null, true);
+        ClusterView.Container waiting = new ClusterView.Container("api", "waiting", "ContainerCreating", false);
+        List<ClusterView.Pod> pods = List.of(
+                new ClusterView.Pod("api-1", "node-a", "Running", true, true, true, true, true, List.of(running)),
+                new ClusterView.Pod("api-2", "node-b", "Pending", true, true, false, false, false, List.of(waiting)),
+                new ClusterView.Pod("api-3", "", "Pending", false, false, false, false, false, List.of()));
+        assertEquals(List.of(new ClusterView.Node("node-a", true), new ClusterView.Node("node-b", false)),
+                KubeParser.nodesFromPods(pods));
+        assertTrue(KubeParser.nodesFromPods(List.of()).isEmpty());
+    }
+
+    @Test
     void costQueryResult() throws Exception {
         assertEquals(12.35, CostManagementReader.parse("{\"properties\":{\"columns\":[{\"name\":\"CostUSD\"},{\"name\":\"Currency\"}],\"rows\":[[12.3456,\"USD\"]]}}"));
         assertEquals(0.0, CostManagementReader.parse("{\"properties\":{\"rows\":[]}}"));
