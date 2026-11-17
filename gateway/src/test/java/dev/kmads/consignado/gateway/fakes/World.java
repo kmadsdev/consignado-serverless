@@ -95,12 +95,7 @@ public final class World {
     public static final class Vault implements Secrets {
         public final Map<String, String> values = new HashMap<>();
         private final Set<String> seen = new HashSet<>();
-        public int creates;
         @Override public Read read(String name) { return new Read(values.get(name), !seen.add(name)); }
-        @Override public String readOrCreate(String name, Supplier<String> generator) {
-            if (!values.containsKey(name)) { creates++; values.put(name, generator.get()); }
-            return values.get(name);
-        }
     }
 
     public final TestClock clock = new TestClock();
@@ -129,6 +124,7 @@ public final class World {
 
     public World(boolean allowDevOrigin, boolean edgeKeyRequired) {
         vault.values.put(ProxyService.HOST_KEY, "host-key-value");
+        vault.values.put(Hasher.KEY_NAME, "test-hash-key");
         AuditLog auditLog = (who, action, target, ipHash) -> audit.add(action);
         Mailer mailer = (subject, text) -> mails.add(subject);
         BotCheck bot = (token, ip) -> botOk;

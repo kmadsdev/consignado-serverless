@@ -1,5 +1,6 @@
 package dev.kmads.consignado.gateway.functions;
 
+import dev.kmads.consignado.gateway.core.Logs;
 import com.microsoft.azure.functions.ExecutionContext;
 import com.microsoft.azure.functions.HttpMethod;
 import com.microsoft.azure.functions.HttpRequestMessage;
@@ -31,7 +32,9 @@ public class HttpFunctions {
             @HttpTrigger(name = "req", methods = {HttpMethod.GET, HttpMethod.OPTIONS}, route = "health",
                     authLevel = AuthorizationLevel.ANONYMOUS) HttpRequestMessage<Optional<String>> req,
             ExecutionContext context) {
-        return call(req, null, context, Handlers::health);
+        // A constant: health must not depend on configuration or on any Azure call.
+        return req.createResponseBuilder(HttpStatus.OK).header("Content-Type", "application/json")
+                .header("Cache-Control", "no-store").body("{\"status\":\"UP\"}").build();
     }
 
     @FunctionName("engine")
@@ -111,7 +114,9 @@ public class HttpFunctions {
     @FunctionName("admin")
     public HttpResponseMessage admin(
             @HttpTrigger(name = "req", methods = {HttpMethod.GET, HttpMethod.POST, HttpMethod.OPTIONS},
-                    route = "admin/{*path}",
+                    // A route that starts with the text "admin" is refused by the Functions host
+                    // ("conflicts with one or more built in routes"). The constraint gives the same URL.
+                    route = "{area:regex(^admin$)}/{*path}",
                     authLevel = AuthorizationLevel.ANONYMOUS) HttpRequestMessage<Optional<String>> req,
             @BindingName("path") String path, ExecutionContext context) {
         return call(req, path, context, Handlers::admin);
@@ -136,8 +141,7 @@ public class HttpFunctions {
             response = route.apply(App.handlers(), request);
         } catch (RuntimeException e) {
             // For example a missing environment variable. The message holds a name, never a value.
-            context.getLogger().log(Level.SEVERE, "gateway failed: {0}",
-                    e instanceof IllegalStateException ? e.getMessage() : e.getClass().getName());
+            context.getLogger().log(Level.SEVERE, Logs.fmt("gateway failed: {0}", Logs.of(e)));
             response = GatewayResponse.raw(500, "application/json",
                     "{\"code\":\"internal\",\"message\":\"Internal error\"}".getBytes(StandardCharsets.UTF_8));
         }
