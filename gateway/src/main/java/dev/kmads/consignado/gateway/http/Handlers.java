@@ -14,6 +14,7 @@ import dev.kmads.consignado.gateway.core.Json;
 import dev.kmads.consignado.gateway.core.ProxyService;
 import dev.kmads.consignado.gateway.core.RateGuard;
 import dev.kmads.consignado.gateway.core.RetentionService;
+import dev.kmads.consignado.gateway.core.StatusService;
 import dev.kmads.consignado.gateway.core.Session;
 import dev.kmads.consignado.gateway.core.Settings;
 import dev.kmads.consignado.gateway.core.SnapshotService;
@@ -67,13 +68,15 @@ public final class Handlers {
     private final RateGuard contactGuard;
     private final boolean edgeKeyRequired;
     private final RetentionService retention;
+    private final StatusService status;
 
     public Handlers(TokenVerifier verifier, UserService users, EngineService engine, ProxyService proxy,
                     ContactService contacts, AdminService admin, SnapshotService snapshot, Secrets secrets,
                     Hasher hasher, AuditLog audit, Settings settings, boolean allowDevOrigin, LongSupplier nanos,
                     RateGuard sessionGuard, RateGuard contactGuard, boolean edgeKeyRequired,
-                    RetentionService retention) {
+                    RetentionService retention, StatusService status) {
         this.retention = retention;
+        this.status = status;
         this.verifier = verifier;
         this.users = users;
         this.engine = engine;
@@ -115,6 +118,32 @@ public final class Handlers {
             return GatewayResponse.json(201,
                     contacts.create(json(req), ip, caller.guest() ? null : caller.claims().oid()));
         });
+    }
+
+    /** GET /api/status?host=functions|aks: anyone for functions, a signed-in user for aks. Cached 15 s per host. */
+    public GatewayResponse status(GatewayRequest req) {
+        return run(req, () -> {
+            String host = queryValue(req.rawQuery(), "host");
+            HostKind kind;
+            if ("functions".equals(host)) {
+                kind = HostKind.FUNCTIONS;
+            } else if ("aks".equals(host)) {
+                requireUser(req);
+                kind = HostKind.AKS;
+            } else {
+                throw ApiException.badRequest("Query host must be functions or aks");
+            }
+            return GatewayResponse.json(200, status.status(kind));
+        });
+    }
+
+    private static String queryValue(String rawQuery, String name) {
+        if (rawQuery == null) return null;
+        for (String part : rawQuery.split("&")) {
+            int eq = part.indexOf('=');
+            if (eq > 0 && part.substring(0, eq).equals(name)) return part.substring(eq + 1);
+        }
+        return null;
     }
 
     // ------------------------------------------------------------------- user

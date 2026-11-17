@@ -10,12 +10,35 @@ public record ClusterView(boolean apiServerUp, List<Node> nodes, List<Pod> pods,
 
     public record Node(String name, boolean ready) {}
 
-    public record Container(String name, String state, String reason, boolean imagePresent) {
+    public record Container(String name, String state, String reason, boolean imagePresent, int restarts,
+                            String image) {
+        public Container(String name, String state, String reason, boolean imagePresent) {
+            this(name, state, reason, imagePresent, 0, null);
+        }
+
         public boolean running() { return "running".equals(state); }
+
+        /** The tag of the image ("consignado-api:abc123" -> "abc123"), or null. */
+        public String imageTag() {
+            if (image == null) return null;
+            int slash = image.lastIndexOf('/');
+            int colon = image.lastIndexOf(':');
+            return colon > slash ? image.substring(colon + 1) : null;
+        }
     }
 
     public record Pod(String name, String node, String phase, boolean scheduled, boolean initialized,
-                      boolean readyToStart, boolean containersReady, boolean ready, List<Container> containers) {
+                      boolean readyToStart, boolean containersReady, boolean ready, List<Container> containers,
+                      java.time.Instant createdAt) {
+
+        public Pod(String name, String node, String phase, boolean scheduled, boolean initialized,
+                   boolean readyToStart, boolean containersReady, boolean ready, List<Container> containers) {
+            this(name, node, phase, scheduled, initialized, readyToStart, containersReady, ready, containers, null);
+        }
+
+        public int restarts() {
+            return containers.stream().mapToInt(Container::restarts).sum();
+        }
 
         public boolean imagePulled() {
             return !containers.isEmpty() && containers.stream().allMatch(c -> c.imagePresent() || c.running());

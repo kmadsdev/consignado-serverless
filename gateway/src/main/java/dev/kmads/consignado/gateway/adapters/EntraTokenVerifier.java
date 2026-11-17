@@ -32,7 +32,18 @@ public final class EntraTokenVerifier implements TokenVerifier {
         this(tenantId, audience, keys, null);
     }
 
+    private final JWKSource<SecurityContext> keySource;
+    /** Set when the key set was really downloaded (not served from the cache). */
+    private final java.util.concurrent.atomic.AtomicReference<java.time.Instant> keysFetchedAt;
+
     public EntraTokenVerifier(String tenantId, String audience, JWKSource<SecurityContext> keys, String clientApp) {
+        this(tenantId, audience, keys, clientApp, new java.util.concurrent.atomic.AtomicReference<>());
+    }
+
+    private EntraTokenVerifier(String tenantId, String audience, JWKSource<SecurityContext> keys, String clientApp,
+                               java.util.concurrent.atomic.AtomicReference<java.time.Instant> fetchedAt) {
+        this.keySource = keys;
+        this.keysFetchedAt = fetchedAt;
         this.clientApp = clientApp;
         Set<String> audiences = new LinkedHashSet<>();
         audiences.add(audience);
@@ -56,14 +67,50 @@ public final class EntraTokenVerifier implements TokenVerifier {
     /** clientApp: the SPA client id (ENTRA_SPA_CLIENT_ID); when set, a token for another client app is refused. */
     public static EntraTokenVerifier forTenant(String tenantId, String audience, String clientApp) {
         try {
-            JWKSource<SecurityContext> keys = JWKSourceBuilder
-                    .create(URI.create("https://login.microsoftonline.com/" + tenantId + "/discovery/v2.0/keys").toURL())
+            java.util.concurrent.atomic.AtomicReference<java.time.Instant> fetchedAt =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            com.nimbusds.jose.jwk.source.JWKSetSource<SecurityContext> download =
+                    new com.nimbusds.jose.jwk.source.URLBasedJWKSetSource<>(
+                            URI.create("https://login.microsoftonline.com/" + tenantId + "/discovery/v2.0/keys").toURL(),
+                            new com.nimbusds.jose.util.DefaultResourceRetriever(
+                                    JWKSourceBuilder.DEFAULT_HTTP_CONNECT_TIMEOUT,
+                                    JWKSourceBuilder.DEFAULT_HTTP_READ_TIMEOUT,
+                                    JWKSourceBuilder.DEFAULT_HTTP_SIZE_LIMIT));
+            // Records the time of each real download; the cache below serves the other calls.
+            com.nimbusds.jose.jwk.source.JWKSetSource<SecurityContext> recorded =
+                    new com.nimbusds.jose.jwk.source.JWKSetSource<>() {
+                        @Override
+                        public com.nimbusds.jose.jwk.JWKSet getJWKSet(
+                                com.nimbusds.jose.jwk.source.JWKSetCacheRefreshEvaluator evaluator, long currentTime,
+                                SecurityContext context) throws com.nimbusds.jose.KeySourceException {
+                            com.nimbusds.jose.jwk.JWKSet set = download.getJWKSet(evaluator, currentTime, context);
+                            fetchedAt.set(java.time.Instant.now());
+                            return set;
+                        }
+
+                        @Override
+                        public void close() throws java.io.IOException {
+                            download.close();
+                        }
+                    };
+            JWKSource<SecurityContext> keys = JWKSourceBuilder.create(recorded)
                     .cache(60 * 60 * 1000L, 15 * 1000L)
                     .build();
-            return new EntraTokenVerifier(tenantId, audience, keys, clientApp);
+            return new EntraTokenVerifier(tenantId, audience, keys, clientApp, fetchedAt);
         } catch (java.net.MalformedURLException e) {
             throw new IllegalStateException("Invalid environment variable: ENTRA_TENANT_ID");
         }
+    }
+
+    /**
+     * For the status page: loads the signing keys when the cache is empty (one download), and returns when
+     * they were downloaded. Null when this verifier has no download record (tests with fixed keys).
+     */
+    public java.time.Instant signingKeysFetchedAt() throws Exception {
+        java.util.List<com.nimbusds.jose.jwk.JWK> found = keySource.get(
+                new com.nimbusds.jose.jwk.JWKSelector(new com.nimbusds.jose.jwk.JWKMatcher.Builder().build()), null);
+        if (found.isEmpty()) throw new IllegalStateException("no signing keys");
+        return keysFetchedAt.get();
     }
 
     @Override

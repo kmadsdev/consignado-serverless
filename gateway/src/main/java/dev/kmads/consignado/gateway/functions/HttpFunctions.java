@@ -53,6 +53,14 @@ public class HttpFunctions {
         return call(req, null, context, Handlers::snapshot);
     }
 
+    @FunctionName("status")
+    public HttpResponseMessage status(
+            @HttpTrigger(name = "req", methods = {HttpMethod.GET, HttpMethod.OPTIONS}, route = "status",
+                    authLevel = AuthorizationLevel.ANONYMOUS) HttpRequestMessage<Optional<String>> req,
+            ExecutionContext context) {
+        return call(req, null, context, Handlers::status);
+    }
+
     @FunctionName("contact")
     public HttpResponseMessage contact(
             @HttpTrigger(name = "req", methods = {HttpMethod.POST, HttpMethod.OPTIONS}, route = "contact",
