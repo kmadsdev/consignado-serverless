@@ -88,7 +88,7 @@ public final class App {
         return new Handlers(EntraTokenVerifier.forTenant(config.tenantId(), config.apiAudience()), users, engine,
                 proxy, contacts, admin, snapshot, secrets, hasher, audit, settings, config.allowDevOrigin(),
                 System::nanoTime, new RateGuard(5, Duration.ofMinutes(10), clock),
-                new RateGuard(3, Duration.ofMinutes(10), clock));
+                new RateGuard(3, Duration.ofMinutes(10), clock), config.edgeCloudflare());
     }
 
     private static final SecureRandom RANDOM = new SecureRandom();

@@ -45,7 +45,7 @@ public final class TraceBuilder {
         boolean cold = upstreamMs > COLD_MS;
         boolean failed = upstreamMs < 0 || status == 0;
         t.done(Stages.REQUEST, "browser sent the request", null);
-        t.done(Stages.EDGE, "Azure Front Door passed the request", null);
+        t.done(Stages.EDGE, "Cloudflare edge: WAF, rate limit", null);
         t.done(Stages.GATEWAY, "gateway work without the calls below", own);
         t.done(Stages.IDENTITY, guest ? "guest: no token" : "Entra ID token verified", identityMs);
         if (host == HostKind.AKS) {

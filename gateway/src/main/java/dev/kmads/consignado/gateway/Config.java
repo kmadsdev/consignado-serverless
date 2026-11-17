@@ -10,7 +10,8 @@ public record Config(
         String clientId, String tenantId, String apiAudience, String adminOid, String aksResourceId,
         String aksApiServerUrl, String aksCaCertB64, String aksInternalUrl, String apifnBaseUrl,
         String keyVaultUrl, String storageAccount, String ownerEmail, int windowMinutes, int windowsMax,
-        int cooldownMinutes, double budgetLimitUsd, String acsEndpoint, String acsSender, boolean allowDevOrigin) {
+        int cooldownMinutes, double budgetLimitUsd, String acsEndpoint, String acsSender, boolean allowDevOrigin,
+        boolean edgeCloudflare) {
 
     private static final Pattern AKS_ID = Pattern.compile(
             "^/subscriptions/[0-9a-fA-F\\-]{36}/resourceGroups/[A-Za-z0-9_.()\\-]{1,90}"
@@ -42,7 +43,8 @@ public record Config(
                 decimal(env, "BUDGET_LIMIT_USD"),
                 optional(env, "ACS_ENDPOINT"),
                 optional(env, "ACS_SENDER"),
-                "true".equalsIgnoreCase(optional(env, "ALLOW_DEV_ORIGIN")));
+                "true".equalsIgnoreCase(optional(env, "ALLOW_DEV_ORIGIN")),
+                "cloudflare".equals(optional(env, "EDGE")));
         if (!AKS_ID.matcher(c.aksResourceId).matches()) throw invalid("AKS_RESOURCE_ID");
         if (!STORAGE.matcher(c.storageAccount).matches()) throw invalid("STORAGE_ACCOUNT");
         if (c.acsEndpoint != null && c.acsSender == null) throw missing("ACS_SENDER");

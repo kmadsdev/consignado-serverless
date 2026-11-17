@@ -38,6 +38,7 @@ import java.util.regex.Pattern;
 public final class Handlers {
     private static final Logger LOG = Logger.getLogger("consignado.gateway");
     public static final String DEV_ORIGIN = "http://localhost:5173";
+    public static final String EDGE_KEY = "edge-key";
     public static final String EXPOSED = "x-consignado-host, x-consignado-trace";
     private static final int MAX_JSON_BYTES = 16 * 1024;
     private static final int MAX_TOKEN_CHARS = 8192;
@@ -62,11 +63,12 @@ public final class Handlers {
     private final LongSupplier nanos;
     private final RateGuard sessionGuard;
     private final RateGuard contactGuard;
+    private final boolean edgeKeyRequired;
 
     public Handlers(TokenVerifier verifier, UserService users, EngineService engine, ProxyService proxy,
                     ContactService contacts, AdminService admin, SnapshotService snapshot, Secrets secrets,
                     Hasher hasher, AuditLog audit, Settings settings, boolean allowDevOrigin, LongSupplier nanos,
-                    RateGuard sessionGuard, RateGuard contactGuard) {
+                    RateGuard sessionGuard, RateGuard contactGuard, boolean edgeKeyRequired) {
         this.verifier = verifier;
         this.users = users;
         this.engine = engine;
@@ -82,6 +84,7 @@ public final class Handlers {
         this.nanos = nanos;
         this.sessionGuard = sessionGuard;
         this.contactGuard = contactGuard;
+        this.edgeKeyRequired = edgeKeyRequired;
     }
 
     // ----------------------------------------------------------------- public
@@ -206,7 +209,7 @@ public final class Handlers {
      * A body that shows a spend below the budget (an early alert) changes nothing; every other body pauses.
      */
     public GatewayResponse budgetHook(GatewayRequest req) {
-        return run(req, () -> {
+        return run(req, false, () -> {
             if (belowBudget(req.body())) {
                 audit.record("budget-alert", "budget.alert.early", "engine", null);
                 return GatewayResponse.json(200, Map.of("status", "noted"));
@@ -247,7 +250,35 @@ public final class Handlers {
     }
 
     private GatewayResponse run(GatewayRequest req, Supplier<GatewayResponse> action) {
+        return run(req, true, action);
+    }
+
+    /**
+     * The edge key proves that the request came through the Cloudflare Worker. It is checked before
+     * anything else, and a refusal says nothing about the reason.
+     */
+    private boolean edgeKeyOk(GatewayRequest req) {
+        String sent = req.header("x-edge-key");
+        if (sent == null || sent.isEmpty() || sent.length() > 512) return false;
+        String expected;
+        try {
+            expected = secrets.read(EDGE_KEY).value();
+        } catch (RuntimeException e) {
+            return false;
+        }
+        if (expected == null || expected.isEmpty()) return false;
+        return java.security.MessageDigest.isEqual(sent.getBytes(StandardCharsets.UTF_8),
+                expected.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private GatewayResponse run(GatewayRequest req, boolean edgeRoute, Supplier<GatewayResponse> action) {
         GatewayResponse response;
+        if (edgeKeyRequired && edgeRoute && !edgeKeyOk(req)) {
+            response = GatewayResponse.json(403, new Views.ErrorBody("forbidden", "Not allowed"));
+            response.headers().put("Cache-Control", "no-store");
+            response.headers().put("X-Content-Type-Options", "nosniff");
+            return response;
+        }
         if (req.method().equals("OPTIONS")) {
             response = new GatewayResponse(204, new java.util.LinkedHashMap<>(), new byte[0]);
         } else {
@@ -305,15 +336,12 @@ public final class Handlers {
     }
 
     /**
-     * Azure Front Door sets X-Azure-ClientIP. The app accepts traffic from Front Door only,
-     * and that is the only reason to trust this header.
+     * The Cloudflare edge sets CF-Connecting-IP. It is read only inside a route action, and an action
+     * runs only after the edge key matched: that is the only reason to trust this header.
+     * No other client-sent header is trusted for the address.
      */
     static String clientIp(GatewayRequest req) {
-        String ip = req.header("x-azure-clientip");
-        if (ip == null || ip.isBlank()) {
-            String forwarded = req.header("x-forwarded-for");
-            if (forwarded != null) ip = forwarded.split(",")[0].strip();
-        }
+        String ip = req.header("cf-connecting-ip");
         if (ip == null) return null;
         ip = ip.strip();
         return IP.matcher(ip).matches() ? ip : null;

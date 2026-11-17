@@ -123,9 +123,11 @@ public final class World {
     public final Handlers handlers;
     public final AtomicInteger ids = new AtomicInteger();
 
-    public World() { this(false); }
+    public World() { this(false, false); }
 
-    public World(boolean allowDevOrigin) {
+    public World(boolean allowDevOrigin) { this(allowDevOrigin, false); }
+
+    public World(boolean allowDevOrigin, boolean edgeKeyRequired) {
         vault.values.put(ProxyService.HOST_KEY, "host-key-value");
         AuditLog auditLog = (who, action, target, ipHash) -> audit.add(action);
         Mailer mailer = (subject, text) -> mails.add(subject);
@@ -165,7 +167,7 @@ public final class World {
         snapshot = new SnapshotService(upstream, vault, snapshotStore, engineStore, clock);
         handlers = new Handlers(verifier, userService, engine, proxy, contacts, admin, snapshot, vault, hasher,
                 auditLog, settings, allowDevOrigin, () -> nanos, new RateGuard(5, Duration.ofMinutes(10), clock),
-                new RateGuard(3, Duration.ofMinutes(10), clock));
+                new RateGuard(3, Duration.ofMinutes(10), clock), edgeKeyRequired);
     }
 
     // ------------------------------------------------------------ request helpers
@@ -173,7 +175,7 @@ public final class World {
     public static GatewayRequest req(String method, String pathParam, String token, String ip, String body) {
         Map<String, String> headers = new HashMap<>();
         if (token != null) headers.put("Authorization", "Bearer " + token);
-        if (ip != null) headers.put("X-Azure-ClientIP", ip);
+        if (ip != null) headers.put("CF-Connecting-IP", ip);
         return GatewayRequest.of(method, pathParam, null, headers, body == null ? null : body.getBytes(StandardCharsets.UTF_8));
     }
 

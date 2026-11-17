@@ -107,7 +107,7 @@ public final class EngineService {
         s.userId = user.id;
         s.requestedAt = now;
         s.add(now, Stages.REQUEST, LifecycleEvent.DONE, "browser asked for an access window", null);
-        s.add(now, Stages.EDGE, LifecycleEvent.DONE, "Azure Front Door passed the request", null);
+        s.add(now, Stages.EDGE, LifecycleEvent.DONE, "Cloudflare edge: WAF, rate limit", null);
         s.add(now, Stages.GATEWAY, LifecycleEvent.DONE, "gateway accepted the request", null);
         s.add(now, Stages.IDENTITY, LifecycleEvent.DONE, "Entra ID token verified", identityMs);
         s.add(now, Stages.QUOTA, LifecycleEvent.DONE, admin ? "owner account"
