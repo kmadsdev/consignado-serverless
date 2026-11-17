@@ -24,16 +24,16 @@ Plain Java: no Spring, no dependency injection framework. All objects are built 
 | `POST /api/contact` | all + Turnstile token | `ContactRequest` (201), email to the owner. Kinds `contact` and `more-windows`. A signed-in sender is linked: the row has `userId` (null for a guest), and `GET /api/admin/contacts` shows it |
 | `GET /api/me` | token | `Me`; the first call creates the user and emails the owner |
 | `PUT /api/me/profile` | token + Turnstile token | `Profile` + `{fingerprint, turnstileToken}`; duplicate check; `Me` |
-| `POST /api/sessions` | user | `Session` (201; 200 when the user already has an active window). 409 `paused`, `held`, `blocked`, `no-windows`, `profile-incomplete`, `cooldown` (with `Retry-After`) |
+| `POST /api/sessions` | user | `Session` (201; 200 when the user already has an active window). 409 `paused`, `held`, `blocked`, `no-windows`, `profile-incomplete`, `cooldown` (with `Retry-After`), `daily-limit` (`DAILY_WINDOWS_MAX`, default 12, new windows in any 24 hours over all accounts; the owner is not limited), `busy` (the account row changed twice at the same time) |
 | `GET /api/sessions/{id}` | owner or admin | `Session` with events. A poll also reads the real cluster signals (at most every 3 s) |
 | `POST /api/sessions/{id}/end` | owner or admin | ends the window early: `Session` in state `ended` (200; an ended or failed session comes back unchanged). The window is not given back to the quota (a `starting` window is counted now). The timer then stops the cluster when no window is active. 404 for another user's session |
-| `GET, POST, PATCH /api/fn/{*path}` | token; guest only `POST api/v1/simulations/preview` | proxy to the Functions API host |
+| `GET, POST, PATCH /api/fn/{*path}` | token; guest only `POST api/v1/simulations/preview` (503 `paused` while the engine is paused for budget) | proxy to the Functions API host |
 | `GET, POST, PATCH /api/aks/{*path}` | token + own window in state `ready` | proxy to the AKS host |
 | `GET /api/admin/users`, `POST /api/admin/users/{id}` | admin | `AdminUser[]` / `AdminUser`; actions `approve`, `hold`, `block`, `grant` (`windows` 1 to 20, default 1, added to the maximum), `delete` (see "Personal data") |
 | `GET /api/admin/sessions`, `/state`, `/contacts` | admin | `Session[]`, `AdminState`, `ContactRequest[]` |
 | `POST /api/admin/pause` `{paused}`, `POST /api/admin/engine/stop` | admin | `AdminState` |
-| `POST /api/hooks/budget` | function key | pauses (reason `budget`) and stops the cluster |
-| timer `reaper`, every minute | - | advances sessions, ends windows, stops the idle cluster, refreshes the snapshot every 10 minutes, runs the retention job once per day |
+| `POST /api/hooks/budget` | function key | spend at or above the budget: pauses (reason `budget`) and stops the cluster; spend below: audit only; a body without numeric `data.SpendingAmount` and `data.Budget`: 400, no pause |
+| timer `reaper`, every minute | - | advances sessions, ends windows, stops the idle cluster, checks the month-to-date cost every 30 minutes (at or above `BUDGET_LIMIT_USD`: same pause as the budget hook), refreshes the snapshot every 10 minutes, runs the retention job once per day |
 
 Errors are `{code, message}`. The proxy returns the status and the JSON of the API host unchanged, plus `x-consignado-host` and `x-consignado-trace` (base64url JSON `RequestTrace`). `cold` is true only for the Functions host and only when the upstream call took more than 8 s; the AKS host never reports `cold`.
 
@@ -41,7 +41,7 @@ Errors are `{code, message}`. The proxy returns the status and the JSON of the A
 
 Required: `AZURE_CLIENT_ID`, `ENTRA_TENANT_ID`, `ENTRA_API_AUDIENCE`, `ADMIN_OID`, `AKS_RESOURCE_ID`, `AKS_API_SERVER_URL`, `AKS_CA_CERT_B64`, `AKS_INTERNAL_URL`, `APIFN_BASE_URL`, `KEY_VAULT_URL`, `STORAGE_ACCOUNT`, `OWNER_EMAIL`, `WINDOW_MINUTES`, `WINDOWS_MAX`, `COOLDOWN_MINUTES`, `BUDGET_LIMIT_USD`.
 
-Optional: `ACS_ENDPOINT` and `EMAIL_SENDER` (or `ACS_SENDER`) (email; without them the mailer writes only an audit row), `ALLOW_DEV_ORIGIN=true` (CORS for `http://localhost:5173`), `EDGE=cloudflare` (the edge key becomes mandatory).
+Optional: `ACS_ENDPOINT` and `EMAIL_SENDER` (or `ACS_SENDER`) (email; without them the mailer writes only an audit row), `ALLOW_DEV_ORIGIN=true` (CORS for `http://localhost:5173`), `EDGE` (the edge key is required unless `EDGE=local`; a missing value or any other value keeps the check on), `DAILY_WINDOWS_MAX` (default 12), `ENTRA_SPA_CLIENT_ID` (when set, a token whose `azp` is another client application is refused), `TURNSTILE_HOSTNAMES` (comma list; default `consignado.kmads.dev,cluster.consignado.kmads.dev`).
 
 A missing or wrong variable stops the app at the first request. The log shows the name of the variable and never a value.
 
@@ -88,15 +88,17 @@ A JDK 21 or newer is necessary. The tests run the real core and the real handler
 |---|---|---|
 | The gateway verifies the token itself (signature against the tenant JWKS, issuer, tenant, audience, `exp`, `nbf`, scope `access_as_user`). | It does not depend on a platform feature and the rules are tested. | The JWKS is cached for 1 hour: a key that Entra ID removes stays accepted for that time at most. |
 | A token that does not verify gives 401. It is never treated as a guest. | A broken client must see its error. | None. |
-| Edge key: with `EDGE=cloudflare`, every route except the budget hook needs `X-Edge-Key` equal to the secret `edge-key` (constant-time compare). A refusal is 403 with no detail. | Only traffic that passed the Cloudflare edge (WAF, rate limit) reaches the code. | One shared secret. A change of the secret needs the Worker and Key Vault to change together (the cache is 5 minutes). |
+| Edge key: unless `EDGE=local`, every route except the budget hook needs `X-Edge-Key` equal to the secret `edge-key` (constant-time compare). A wrong or missing header is 403 with no detail; a secret that cannot be read (Key Vault error or no value) is 503 `unavailable`, never a pass. | Only traffic that passed the Cloudflare edge (WAF, rate limit) reaches the code. | One shared secret. A change of the secret needs the Worker and Key Vault to change together (the cache is 5 minutes). |
 | The client IP comes only from `CF-Connecting-IP`, and only after the edge key matched. | A client cannot forge its address. | Without the edge (local runs) there is no IP. |
 | IP and fingerprint are stored only as HMAC-SHA256 with a Key Vault key. | A leak of the table does not show addresses. | The duplicate check sees only exact matches. A new browser or a VPN passes it. It is a filter, not a proof. |
-| Same device holds the account; same IP only sets a flag. | An office or a university shares one IP. | The owner must approve held accounts by hand. |
+| Same device (flag `same-device`) or same normalised mailbox (flag `same-mailbox`: lower case, no `+tag`, no dots for gmail.com and googlemail.com; stored only as HMAC `mailboxHash`) holds the account; same IP only sets the flag `same-ip`. Other flag: `disposable-email`. | An office or a university shares one IP. The fingerprint comes from the client, the mailbox from the verified token. | The owner must approve held accounts by hand. |
 | The proxy forwards only `api/v1/` paths, methods GET, POST and PATCH, bodies up to 64 KB, and six request headers (`accept`, `accept-language`, `content-type`, `idempotency-key`, `if-none-match`, `x-request-id`). `Authorization`, cookies and hop-by-hop headers never go upstream. | An allow-list is safer than a block-list. | A new header that the API needs must be added here. |
 | A guest can call one route: `POST api/v1/simulations/preview` on the Functions host. | It has no database call. | None. |
+| Agreements: only the owner may write them (any method except GET on `api/v1/agreements` and below, both hosts); other users get 403 `forbidden`. | Agreement names are free text and the public snapshot shows them unmasked. | Agreement names in the snapshot come only from the owner's seed data. |
+| Users rows are written with the ETag (`If-Match`); a conflict reads the row again and applies the change once more. | A request that read the row earlier never overwrites an admin `block`, `hold` or `grant`. | A second conflict gives 409 `busy`. |
 | Errors are generic `{code, message}`. The log holds exception class names, not messages. | A message can hold a host name or a value. | Debugging needs Application Insights and the class name. |
 | Secrets are cached 5 minutes in memory. | Fewer Key Vault calls, and the trace shows `cached`. | A rotated secret is used after 5 minutes at most. |
-| Turnstile: no secret in Key Vault = accept and log `bot check not configured`. Cloudflare does not answer = refuse. | The platform can start before the Turnstile widget exists. | Until the secret exists there is no bot check. |
+| Turnstile fails closed: no secret, a Key Vault error or no answer from Cloudflare = refuse. The `hostname` of the answer must be in `TURNSTILE_HOSTNAMES`. | A deleted secret must not turn the bot check off. | The forms need the secret `turnstile-secret`. |
 | Per-user guard in memory (5 session requests and 3 contact requests in 10 minutes). | Stops a loop of one user. | Each instance counts alone. The real rate limit is the edge. |
 | Every admin call, every start and every stop writes an audit row. An audit failure does not stop the request. | The service stays up. | A storage failure can lose audit rows (it is logged). |
 | The snapshot masks person names and CPF and removes email, phone and address. | `GET /api/snapshot` is public. | Salary values stay, without a readable name or CPF. |

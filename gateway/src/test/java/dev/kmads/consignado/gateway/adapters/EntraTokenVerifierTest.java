@@ -105,6 +105,20 @@ class EntraTokenVerifierTest {
     }
 
     @Test
+    void clientApplicationIsPinnedWhenConfigured() throws Exception {
+        String spa = "44444444-4444-4444-4444-444444444444";
+        EntraTokenVerifier pinned = new EntraTokenVerifier(TENANT, AUDIENCE,
+                new ImmutableJWKSet<>(new JWKSet(key.toPublicJWK())), spa);
+        assertEquals(OID, pinned.verify(token(key, b -> b.claim("azp", spa))).oid());
+        for (String t : new String[] {token(key, b -> b.claim("azp", "99999999-9999-9999-9999-999999999999")),
+                token(key, b -> { })}) {
+            assertThrows(dev.kmads.consignado.gateway.core.AuthException.class, () -> pinned.verify(t));
+        }
+        // Not configured: no pin (the default until ENTRA_SPA_CLIENT_ID is set).
+        assertEquals(OID, verifier.verify(token(key, b -> b.claim("azp", "99999999-9999-9999-9999-999999999999"))).oid());
+    }
+
+    @Test
     void missingOidOrExpIsRefused() throws Exception {
         refused(token(key, b -> b.claim("oid", null)));
         refused(token(key, b -> b.expirationTime(null)));

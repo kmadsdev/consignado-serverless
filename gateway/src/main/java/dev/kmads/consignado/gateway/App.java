@@ -71,7 +71,7 @@ public final class App {
 
         Secrets secrets = new KeyVaultSecrets(config.keyVaultUrl(), credential);
         Hasher hasher = new Hasher(secrets);
-        BotCheck botCheck = new TurnstileBotCheck(secrets);
+        BotCheck botCheck = new TurnstileBotCheck(secrets, config.turnstileHostnames());
         Mailer mailer = config.acsEndpoint() == null || config.acsSender() == null ? Mailers.auditOnly(audit)
                 : Mailers.acs(config.acsEndpoint(), config.acsSender(), config.ownerEmail(), credential, audit);
         Upstream upstream = new HttpUpstream(config.apifnBaseUrl(), config.aksInternalUrl());
@@ -92,10 +92,10 @@ public final class App {
         SnapshotService snapshot = new SnapshotService(upstream, secrets,
                 new BlobSnapshotStore(tokens, config.storageAccount()), engineStore, clock);
 
-        return new Handlers(EntraTokenVerifier.forTenant(config.tenantId(), config.apiAudience()), users, engine,
+        return new Handlers(EntraTokenVerifier.forTenant(config.tenantId(), config.apiAudience(), config.spaClientId()), users, engine,
                 proxy, contacts, admin, snapshot, secrets, hasher, audit, settings, config.allowDevOrigin(),
                 System::nanoTime, new RateGuard(5, Duration.ofMinutes(10), clock),
-                new RateGuard(3, Duration.ofMinutes(10), clock), config.edgeCloudflare(), retention);
+                new RateGuard(3, Duration.ofMinutes(10), clock), config.edgeKeyRequired(), retention);
     }
 
     private static final SecureRandom RANDOM = new SecureRandom();
