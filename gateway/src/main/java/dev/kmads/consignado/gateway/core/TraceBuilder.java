@@ -35,8 +35,8 @@ public final class TraceBuilder {
         return stage(stage, LifecycleEvent.DONE, detail, ms);
     }
 
-    public Views.RequestTrace build(long totalMs, long upstreamMs) {
-        return new Views.RequestTrace(host.id(), cold(host, upstreamMs), totalMs, List.copyOf(events));
+    public Views.RequestTrace build(long totalMs, long upstreamMs, ApiTiming api) {
+        return new Views.RequestTrace(host.id(), cold(host, upstreamMs), totalMs, List.copyOf(events), api);
     }
 
     /**
@@ -48,31 +48,61 @@ public final class TraceBuilder {
                                               long keyVaultMs, boolean keyVaultCached, boolean keyVaultUsed,
                                               long upstreamMs, int status, long totalMs) {
         return forProxy(host, now, guest, identityMs, keyVaultMs, keyVaultCached, keyVaultUsed, upstreamMs, status,
-                totalMs, null);
+                totalMs, null, null);
+    }
+
+    public static Views.RequestTrace forProxy(HostKind host, Instant now, boolean guest, long identityMs,
+                                              long keyVaultMs, boolean keyVaultCached, boolean keyVaultUsed,
+                                              long upstreamMs, int status, long totalMs, String failure) {
+        return forProxy(host, now, guest, identityMs, keyVaultMs, keyVaultCached, keyVaultUsed, upstreamMs, status,
+                totalMs, failure, null);
     }
 
     /**
      * failure: a short detail when no upstream answer came ("timeout after 30 s", "function key not found in
-     * Key Vault"); null for the default text. An upstream answer of 500 or more is an error stage too.
+     * Key Vault"); null for the default text. An upstream answer of 500 or more is an error too.
+     * api: the parsed X-Consignado-Timing of the answer, or null.
+     *
+     * <p>Invariant: the stage times add up to totalMs. Every measured part goes to exactly one stage: gateway
+     * (the rest), identity, keyvault, and the upstream time. The upstream time goes to the host stage, app and
+     * database when the API reported its own time; else to function-cold-start (cold call), the failed host stage
+     * (error) or response (as before addendum 2).
      */
     public static Views.RequestTrace forProxy(HostKind host, Instant now, boolean guest, long identityMs,
                                               long keyVaultMs, boolean keyVaultCached, boolean keyVaultUsed,
-                                              long upstreamMs, int status, long totalMs, String failure) {
+                                              long upstreamMs, int status, long totalMs, String failure,
+                                              ApiTiming api) {
         TraceBuilder t = new TraceBuilder(host, now);
+        boolean called = upstreamMs >= 0;
         long up = Math.max(upstreamMs, 0);
-        long own = Math.max(0, totalMs - identityMs - keyVaultMs - up);
+        long id = guest ? 0 : identityMs;
+        long own = Math.max(0, totalMs - id - keyVaultMs - up);
         boolean cold = cold(host, upstreamMs);
         boolean failed = upstreamMs < 0 || status == 0;
+        boolean error = failed || status >= 500;
+        // The API's own time is used only for a real answer, and only when it fits inside the measured call.
+        ApiTiming timing = !error && api != null && api.appMs() <= up + 2 ? api : null;
+        long appTotal = timing == null ? 0 : Math.min(Math.round(timing.appMs()), up);
+        long dbMs = timing == null || !timing.touchedDatabase() ? 0 : Math.min(Math.round(timing.db().ms()), appTotal);
+        long hostMs = up - appTotal;
+        String errorDetail = failed ? (failure != null && !failure.startsWith("function key") ? failure
+                : host == HostKind.AKS ? "no answer from the internal load balancer" : "no answer from the API host")
+                : "upstream answered " + status;
+
         t.done(Stages.REQUEST, "browser sent the request", null);
         t.done(Stages.EDGE, "Cloudflare edge: WAF, rate limit", null);
         t.done(Stages.GATEWAY, "gateway work without the calls below", own);
-        t.done(Stages.IDENTITY, guest ? "guest: no token" : "Entra ID token verified", identityMs);
+        if (!guest) t.done(Stages.IDENTITY, "Entra ID token verified", identityMs);
         if (host == HostKind.AKS) {
             t.done(Stages.QUOTA, "access window is open", null);
             t.done(Stages.KEYVAULT, "not needed for this host", 0L);
-            t.stage(Stages.LOAD_BALANCER, failed ? LifecycleEvent.ERROR : LifecycleEvent.DONE,
-                    failed ? (failure != null ? failure : "no answer from the internal load balancer")
-                            : "internal load balancer to pod", null);
+            if (error) {
+                t.stage(Stages.LOAD_BALANCER, LifecycleEvent.ERROR, errorDetail, up);
+            } else if (timing != null) {
+                t.done(Stages.LOAD_BALANCER, "internal load balancer to pod, and the way back", hostMs);
+            } else {
+                t.done(Stages.LOAD_BALANCER, "internal load balancer to pod", null);
+            }
         } else {
             if (failure != null && failure.startsWith("function key")) {
                 t.stage(Stages.KEYVAULT, LifecycleEvent.ERROR, failure, keyVaultMs);
@@ -82,22 +112,31 @@ public final class TraceBuilder {
             }
             if (cold) {
                 t.done(Stages.FUNCTION_COLD_START,
-                        "cold block: instance allocation and JVM start, measured together", up);
+                        "cold block: instance allocation and JVM start, measured together", error ? up : hostMs);
                 t.done(Stages.JVM_START, "inside the cold block of function-cold-start", null);
             }
-            if (!guest) t.done(Stages.DATABASE, "inside the upstream time", null);
+            if (called && error) {
+                t.stage(Stages.FUNCTIONS_HOST, LifecycleEvent.ERROR, errorDetail, cold ? null : up);
+            } else if (timing != null) {
+                if (cold) t.done(Stages.FUNCTIONS_HOST, "inside the cold block of function-cold-start", null);
+                else t.done(Stages.FUNCTIONS_HOST, "Functions host: network, host routing and the way back", hostMs);
+            }
         }
-        if (failed) {
-            t.stage(Stages.RESPONSE, LifecycleEvent.ERROR,
-                    failure != null && !failure.startsWith("function key") ? failure : "no answer from the API host", up);
-        } else if (status >= 500) {
-            t.stage(Stages.RESPONSE, LifecycleEvent.ERROR, "upstream answered " + status, up);
+        if (timing != null) {
+            t.done(Stages.APP, "Spring Boot handled the request in " + timing.instance(), appTotal - dbMs);
+            if (timing.touchedDatabase()) t.done(Stages.DATABASE, timing.databaseDetail(), dbMs);
+        }
+        if (error) {
+            // The upstream time is on the failed host stage (or on function-cold-start); none is left here.
+            t.stage(Stages.RESPONSE, LifecycleEvent.ERROR, errorDetail, called ? null : 0L);
+        } else if (timing != null) {
+            t.done(Stages.RESPONSE, "HTTP " + status + " from the API host", null);
         } else if (cold) {
             t.done(Stages.RESPONSE, "HTTP " + status + "; the time is inside the cold block", null);
         } else {
             t.done(Stages.RESPONSE, "HTTP " + status + " from the API host", up);
         }
-        return t.build(totalMs, up);
+        return t.build(totalMs, upstreamMs, timing);
     }
 
     public static String encode(Views.RequestTrace trace) {

@@ -8,7 +8,15 @@ public interface Upstream {
     record Request(HostKind host, String method, String path, String query, Map<String, String> headers,
                    byte[] body) {}
 
-    record Response(int status, String contentType, byte[] body) {}
+    /**
+     * timing: the raw response header X-Consignado-Timing of the API host, or null. It is the only upstream
+     * response header besides Content-Type that the gateway reads; none is passed on to the browser.
+     */
+    record Response(int status, String contentType, byte[] body, String timing) {
+        public Response(int status, String contentType, byte[] body) {
+            this(status, contentType, body, null);
+        }
+    }
 
     final class UpstreamException extends Exception {
         private final boolean timeout;

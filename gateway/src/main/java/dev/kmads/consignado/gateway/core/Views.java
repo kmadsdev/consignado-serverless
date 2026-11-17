@@ -32,7 +32,13 @@ public final class Views {
 
     public record AdminState(Engine engine, Budget budget, boolean paused) {}
 
-    public record RequestTrace(String host, boolean cold, long totalMs, List<LifecycleEvent> events) {}
+    /** api: the parsed X-Consignado-Timing of the API host; absent when the host sent no valid header. */
+    public record RequestTrace(String host, boolean cold, long totalMs, List<LifecycleEvent> events,
+                               @JsonInclude(JsonInclude.Include.NON_NULL) ApiTiming api) {
+        public RequestTrace(String host, boolean cold, long totalMs, List<LifecycleEvent> events) {
+            this(host, cold, totalMs, events, null);
+        }
+    }
 
     public record ErrorBody(String code, String message) {}
 

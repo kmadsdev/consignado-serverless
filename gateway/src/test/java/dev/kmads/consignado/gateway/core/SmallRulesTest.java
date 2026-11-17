@@ -98,7 +98,9 @@ class SmallRulesTest {
         assertEquals("request", Stages.AKS.get(0));
         assertEquals("cluster-stop", Stages.AKS.get(18));
         assertEquals(java.util.List.of("request", "edge", "gateway", "identity", "keyvault", "function-cold-start",
-                "jvm-start", "database", "response"), Stages.FUNCTIONS);
+                "jvm-start", "functions-host", "app", "database", "response"), Stages.FUNCTIONS);
+        assertEquals(java.util.List.of("request", "edge", "gateway", "identity", "quota", "keyvault", "load-balancer",
+                "app", "database", "response"), Stages.AKS_REQUEST);
     }
 
     @Test

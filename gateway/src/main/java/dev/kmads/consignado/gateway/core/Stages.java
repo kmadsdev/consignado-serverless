@@ -28,6 +28,10 @@ public final class Stages {
     public static final String FUNCTION_COLD_START = "function-cold-start";
     public static final String JVM_START = "jvm-start";
     public static final String RESPONSE = "response";
+    /** Contract addendum 2: time inside the Spring Boot API, without its database time. */
+    public static final String APP = "app";
+    /** Contract addendum 2: the Functions host between the gateway and the application (network included). */
+    public static final String FUNCTIONS_HOST = "functions-host";
 
     public static final List<String> AKS = List.of(
             REQUEST, EDGE, GATEWAY, IDENTITY, QUOTA, KEYVAULT, ARM_START, CONTROL_PLANE, NODE, IMAGE_PULL,
@@ -35,5 +39,10 @@ public final class Stages {
             WINDOW_CLOSE, CLUSTER_STOP);
 
     public static final List<String> FUNCTIONS = List.of(
-            REQUEST, EDGE, GATEWAY, IDENTITY, KEYVAULT, FUNCTION_COLD_START, JVM_START, DATABASE, RESPONSE);
+            REQUEST, EDGE, GATEWAY, IDENTITY, KEYVAULT, FUNCTION_COLD_START, JVM_START, FUNCTIONS_HOST, APP,
+            DATABASE, RESPONSE);
+
+    /** The stages of one proxied AKS request, in order (a subset of AKS plus APP). */
+    public static final List<String> AKS_REQUEST = List.of(
+            REQUEST, EDGE, GATEWAY, IDENTITY, QUOTA, KEYVAULT, LOAD_BALANCER, APP, DATABASE, RESPONSE);
 }

@@ -142,7 +142,8 @@ class ProxyRoutesTest {
         JsonNode t = trace(r);
         assertEquals("functions", t.get("host").asText());
         assertFalse(t.get("cold").asBoolean());
-        assertEquals(List.of("request", "edge", "gateway", "identity", "keyvault", "database", "response"), stages(t));
+        assertEquals(List.of("request", "edge", "gateway", "identity", "keyvault", "response"), stages(t),
+                "no database stage without the API's own timing header");
     }
 
     @Test
@@ -152,12 +153,12 @@ class ProxyRoutesTest {
         JsonNode t = trace(r);
         assertTrue(t.get("cold").asBoolean());
         assertEquals(9200, t.get("totalMs").asLong());
-        assertEquals(List.of("request", "edge", "gateway", "identity", "keyvault", "function-cold-start", "jvm-start",
-                "response"), stages(t), "a guest never reaches the database stage");
-        JsonNode cold = t.get("events").get(5);
+        assertEquals(List.of("request", "edge", "gateway", "keyvault", "function-cold-start", "jvm-start",
+                "response"), stages(t), "a guest has no identity stage");
+        JsonNode cold = t.get("events").get(4);
         assertEquals(9200, cold.get("ms").asLong());
         assertEquals("done", cold.get("status").asText());
-        assertFalse(t.get("events").get(6).has("ms"));
+        assertFalse(t.get("events").get(5).has("ms"));
         assertEquals(0, t.get("events").get(3).get("ms").asLong());
 
         w.upstream.onCall = () -> w.nanos += 120_000_000L;
