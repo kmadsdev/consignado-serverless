@@ -102,7 +102,8 @@ public final class ProxyService {
             kvCached = key.cached();
             kvMs = kvCached ? 0 : ms(t);
             if (!key.found()) {
-                return failure(host, now, guest, identityMs, kvMs, kvCached, kvUsed, -1, 502, startNanos);
+                return failure(host, now, guest, identityMs, kvMs, kvCached, kvUsed, -1, 502, startNanos,
+                        "function key not found in Key Vault");
             }
             out.put("x-functions-key", key.value());
         }
@@ -114,7 +115,8 @@ public final class ProxyService {
                     body == null || body.length == 0 ? null : body));
         } catch (Upstream.UpstreamException e) {
             return failure(host, now, guest, identityMs, kvMs, kvCached, kvUsed, ms(t), e.timeout() ? 504 : 502,
-                    startNanos);
+                    startNanos, e.timeout() ? "timeout after " + host.upstreamTimeout().toSeconds() + " s"
+                            : "no answer from the API host (connection failed)");
         }
         long upstreamMs = ms(t);
         Views.RequestTrace trace = TraceBuilder.forProxy(host, now, guest, identityMs, kvMs, kvCached, kvUsed,
@@ -125,9 +127,9 @@ public final class ProxyService {
     }
 
     private Result failure(HostKind host, Instant now, boolean guest, long identityMs, long kvMs, boolean kvCached,
-                           boolean kvUsed, long upstreamMs, int status, long startNanos) {
+                           boolean kvUsed, long upstreamMs, int status, long startNanos, String detail) {
         Views.RequestTrace trace = TraceBuilder.forProxy(host, now, guest, identityMs, kvMs, kvCached, kvUsed,
-                upstreamMs < 0 ? -1 : upstreamMs, 0, ms(startNanos));
+                upstreamMs < 0 ? -1 : upstreamMs, 0, ms(startNanos), detail);
         Views.ErrorBody error = status == 504
                 ? new Views.ErrorBody("upstream-timeout", "The API host did not answer in time")
                 : new Views.ErrorBody("upstream-unavailable", "The API host is not available now");

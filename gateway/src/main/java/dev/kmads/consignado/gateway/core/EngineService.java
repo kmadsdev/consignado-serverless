@@ -240,7 +240,9 @@ public final class EngineService {
             if (Session.STARTING.equals(s.state)) {
                 advance(s, signals, now, true);
             } else if (Session.READY.equals(s.state) && s.expiresAt != null && !now.isBefore(s.expiresAt)) {
-                end(s, now, "the " + settings.window().toMinutes() + "-minute window ended");
+                long minutes = s.readyAt == null ? settings.window().toMinutes()
+                        : Duration.between(s.readyAt, s.expiresAt).toMinutes();
+                end(s, now, "the " + minutes + "-minute window ended");
             }
         }
         settle(signals, now, "gateway", false);
@@ -506,11 +508,13 @@ public final class EngineService {
         }
         s.add(now, Stages.FIRST_RESPONSE, LifecycleEvent.DONE, "GET /" + READINESS_PATH + " answered 200",
                 signals.probeMs);
+        // The length is the owner's windowMinutes at the moment the window opens; a later change does not alter it.
+        int minutes = users.find(s.userId).map(u -> u.windowMinutes(settings))
+                .orElse((int) settings.window().toMinutes());
         s.state = Session.READY;
         s.readyAt = now;
-        s.expiresAt = now.plus(settings.window());
-        s.add(now, Stages.WINDOW_OPEN, LifecycleEvent.DONE,
-                "window is open for " + settings.window().toMinutes() + " minutes", null);
+        s.expiresAt = now.plus(Duration.ofMinutes(minutes));
+        s.add(now, Stages.WINDOW_OPEN, LifecycleEvent.DONE, "window is open for " + minutes + " minutes", null);
         if (!save(s)) return false;
         // The window is counted only now: a start that fails costs the user nothing.
         UserRows.updateQuietly(users, s.userId, u -> u.windowsUsed = u.windowsUsed + 1, "window count");

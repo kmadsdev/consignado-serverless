@@ -37,7 +37,7 @@ public final class World {
         public static User copy(User u) {
             User c = new User();
             c.id = u.id; c.email = u.email; c.name = u.name; c.company = u.company; c.linkedin = u.linkedin;
-            c.status = u.status; c.windowsUsed = u.windowsUsed; c.windowsMax = u.windowsMax;
+            c.status = u.status; c.windowsUsed = u.windowsUsed; c.windowsMax = u.windowsMax; c.windowMinutes = u.windowMinutes;
             c.flags = new TreeSet<>(u.flags); c.ipHash = u.ipHash; c.fingerprintHash = u.fingerprintHash;
             c.createdAt = u.createdAt; c.lastSeenAt = u.lastSeenAt; c.consentAt = u.consentAt;
             c.approvedByAdmin = u.approvedByAdmin; c.activeSessionId = u.activeSessionId;

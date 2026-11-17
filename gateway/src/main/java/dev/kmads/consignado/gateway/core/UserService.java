@@ -50,6 +50,7 @@ public final class UserService {
             user.email = safe(claims.email(), 254);
             user.name = safe(claims.name(), 80);
             user.windowsMax = settings.windowsMax();
+            user.windowMinutes = (int) settings.window().toMinutes();
             user.createdAt = now;
             user.lastSeenAt = now;
             user.ipHash = hasher.hash(clientIp);
