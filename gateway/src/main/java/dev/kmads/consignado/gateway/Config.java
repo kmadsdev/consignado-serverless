@@ -11,7 +11,11 @@ public record Config(
         String aksApiServerUrl, String aksCaCertB64, String aksInternalUrl, String apifnBaseUrl,
         String keyVaultUrl, String storageAccount, String ownerEmail, int windowMinutes, int windowsMax,
         int cooldownMinutes, double budgetLimitUsd, String acsEndpoint, String acsSender, boolean allowDevOrigin,
-        boolean edgeCloudflare) {
+        boolean edgeKeyRequired, int dailyWindowsMax, String spaClientId, java.util.List<String> turnstileHostnames) {
+
+    /** The only value of EDGE that turns the edge-key check off. Missing or any other value: the key is required. */
+    public static final String EDGE_LOCAL = "local";
+    public static final String DEFAULT_TURNSTILE_HOSTNAMES = "consignado.kmads.dev,cluster.consignado.kmads.dev";
 
     private static final Pattern AKS_ID = Pattern.compile(
             "^/subscriptions/[0-9a-fA-F\\-]{36}/resourceGroups/[A-Za-z0-9_.()\\-]{1,90}"
@@ -44,7 +48,12 @@ public record Config(
                 optional(env, "ACS_ENDPOINT"),
                 sender(env),
                 "true".equalsIgnoreCase(optional(env, "ALLOW_DEV_ORIGIN")),
-                "cloudflare".equals(optional(env, "EDGE")));
+                // Fail closed: a typo or a missing value keeps the edge key on.
+                !EDGE_LOCAL.equals(optional(env, "EDGE")),
+                optionalNumber(env, "DAILY_WINDOWS_MAX", Settings.DEFAULT_DAILY_WINDOWS_MAX, 1, 1000),
+                optional(env, "ENTRA_SPA_CLIENT_ID"),
+                java.util.Arrays.stream(java.util.Objects.requireNonNullElse(optional(env, "TURNSTILE_HOSTNAMES"),
+                        DEFAULT_TURNSTILE_HOSTNAMES).split(",")).map(String::strip).filter(h -> !h.isEmpty()).toList());
         if (!AKS_ID.matcher(c.aksResourceId).matches()) throw invalid("AKS_RESOURCE_ID");
         if (!STORAGE.matcher(c.storageAccount).matches()) throw invalid("STORAGE_ACCOUNT");
         return c;
@@ -52,7 +61,7 @@ public record Config(
 
     public Settings settings() {
         return new Settings(adminOid, Duration.ofMinutes(windowMinutes), windowsMax,
-                Duration.ofMinutes(cooldownMinutes), budgetLimitUsd, Duration.ofMinutes(15), Duration.ofMinutes(20));
+                Duration.ofMinutes(cooldownMinutes), budgetLimitUsd, Duration.ofMinutes(15), Duration.ofMinutes(20), dailyWindowsMax);
     }
 
     /** The sender address: EMAIL_SENDER (the name that Terraform sets) or ACS_SENDER. */
@@ -88,6 +97,10 @@ public record Config(
         } catch (NumberFormatException e) {
             throw invalid(name);
         }
+    }
+
+    private static int optionalNumber(Function<String, String> env, String name, int fallback, int min, int max) {
+        return optional(env, name) == null ? fallback : number(env, name, min, max);
     }
 
     private static double decimal(Function<String, String> env, String name) {
