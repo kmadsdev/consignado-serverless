@@ -33,6 +33,7 @@ public final class World {
         @Override public Optional<User> find(String id) { return Optional.ofNullable(rows.get(id)); }
         @Override public void save(User user) { rows.put(user.id, user); }
         @Override public List<User> list() { return new ArrayList<>(rows.values()); }
+        @Override public void delete(String id) { rows.remove(id); }
     }
 
     public static final class Sessions implements SessionStore {
@@ -54,6 +55,8 @@ public final class World {
         }
         @Override public List<Session> listOpen() { return rows.values().stream().filter(s -> s.open).map(Sessions::copy).toList(); }
         @Override public List<Session> list() { return rows.values().stream().map(Sessions::copy).toList(); }
+        @Override public void delete(String id) { rows.remove(id); }
+        public boolean has(String id) { return rows.containsKey(id); }
     }
 
     public static final class Cluster implements ClusterControl, ClusterObserver {
@@ -105,10 +108,16 @@ public final class World {
     public final Up upstream = new Up();
     public final Vault vault = new Vault();
     public final List<String> audit = new ArrayList<>();
+    /** Full audit rows: who, action, target, ipHash. */
+    public final List<String[]> auditRows = new ArrayList<>();
+    /** Days of the fake audit table (the partition keys). */
+    public final List<java.time.LocalDate> auditDays = new ArrayList<>();
+    public final RetentionService retention;
     public final List<String> mails = new ArrayList<>();
     public final List<Contact> contactRows = new ArrayList<>();
     public final Map<String, String> blob = new HashMap<>();
     public boolean botOk = true;
+    public boolean mailFails;
     public Optional<CostReader.Cost> cost = Optional.empty();
     public long nanos;
     public EngineRecord engineRow = new EngineRecord();
@@ -125,8 +134,20 @@ public final class World {
     public World(boolean allowDevOrigin, boolean edgeKeyRequired) {
         vault.values.put(ProxyService.HOST_KEY, "host-key-value");
         vault.values.put(Hasher.KEY_NAME, "test-hash-key");
-        AuditLog auditLog = (who, action, target, ipHash) -> audit.add(action);
-        Mailer mailer = (subject, text) -> mails.add(subject);
+        AuditLog auditLog = (who, action, target, ipHash) -> {
+            audit.add(action);
+            auditRows.add(new String[] {who, action, target, ipHash});
+        };
+        AuditStore auditStore = day -> {
+            int before = auditDays.size();
+            auditDays.removeIf(d -> d.isBefore(day));
+            return before - auditDays.size();
+        };
+        // The real guard around a fake sender: mailFails makes the send throw, as a refused ACS call does.
+        Mailer mailer = new GuardedMailer((subject, text) -> {
+            if (mailFails) throw new IllegalStateException("ACS refused the mail for owner@example.com");
+            mails.add(subject);
+        }, auditLog);
         BotCheck bot = (token, ip) -> botOk;
         EngineStore engineStore = new EngineStore() {
             @Override public EngineRecord load() {
@@ -134,7 +155,7 @@ public final class World {
                 c.state = engineRow.state; c.since = engineRow.since; c.paused = engineRow.paused;
                 c.pausedReason = engineRow.pausedReason; c.lastStopAt = engineRow.lastStopAt;
                 c.activeSessions = engineRow.activeSessions; c.externalSince = engineRow.externalSince;
-                c.lastSnapshotAt = engineRow.lastSnapshotAt;
+                c.lastSnapshotAt = engineRow.lastSnapshotAt; c.lastRetentionAt = engineRow.lastRetentionAt;
                 return c;
             }
             @Override public void save(EngineRecord record) { engineRow = record; }
@@ -142,6 +163,7 @@ public final class World {
         ContactStore contactStore = new ContactStore() {
             @Override public void save(Contact contact) { contactRows.add(contact); }
             @Override public List<Contact> list() { return List.copyOf(contactRows); }
+            @Override public void delete(String id) { contactRows.removeIf(c -> c.id().equals(id)); }
         };
         SnapshotStore snapshotStore = new SnapshotStore() {
             @Override public Optional<String> read() { return Optional.ofNullable(blob.get("snapshot")); }
@@ -159,11 +181,14 @@ public final class World {
                 idSupplier);
         ProxyService proxy = new ProxyService(upstream, vault, sessions, clock, () -> nanos);
         ContactService contacts = new ContactService(contactStore, mailer, bot, hasher, auditLog, clock, idSupplier);
-        AdminService admin = new AdminService(users, engine, () -> cost, auditLog, settings, clock);
+        UserErasure erasure = new UserErasure(users, sessions, contactStore);
+        AdminService admin = new AdminService(users, engine, () -> cost, auditLog, settings, clock, erasure, hasher);
+        retention = new RetentionService(users, sessions, erasure, auditStore, auditLog, engineStore, hasher, settings,
+                clock);
         snapshot = new SnapshotService(upstream, vault, snapshotStore, engineStore, clock);
         handlers = new Handlers(verifier, userService, engine, proxy, contacts, admin, snapshot, vault, hasher,
                 auditLog, settings, allowDevOrigin, () -> nanos, new RateGuard(5, Duration.ofMinutes(10), clock),
-                new RateGuard(3, Duration.ofMinutes(10), clock), edgeKeyRequired);
+                new RateGuard(3, Duration.ofMinutes(10), clock), edgeKeyRequired, retention);
     }
 
     // ------------------------------------------------------------ request helpers
