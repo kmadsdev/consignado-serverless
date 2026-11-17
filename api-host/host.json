@@ -1,0 +1,32 @@
+{
+  "version": "2.0",
+  "functionTimeout": "00:02:00",
+  "extensions": {
+    "http": {
+      "routePrefix": ""
+    }
+  },
+  "logging": {
+    "logLevel": {
+      "default": "Information"
+    }
+  },
+  "customHandler": {
+    "description": {
+      "defaultExecutablePath": "runtime/bin/java",
+      "workingDirectory": "",
+      "arguments": [
+        "-XX:MaxRAMPercentage=70",
+        "-XX:TieredStopAtLevel=1",
+        "-XX:+UseSerialGC",
+        "-Xshare:auto",
+        "-XX:+ExitOnOutOfMemoryError",
+        "-Dserver.port=%FUNCTIONS_CUSTOMHANDLER_PORT%",
+        "-Dserver.shutdown=immediate",
+        "-jar",
+        "app/consignado-api.jar"
+      ]
+    },
+    "enableForwardingHttpRequest": true
+  }
+}
