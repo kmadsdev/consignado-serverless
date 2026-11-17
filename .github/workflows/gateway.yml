@@ -1,0 +1,62 @@
+name: gateway
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "gateway/**"
+      - ".github/workflows/gateway.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: gateway-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-test-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: gateway
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # verify = compile + tests + package. The Maven plugin stages the function app in
+      # target/azure-functions/<app name>/ (host.json, one function.json per function, the jar, lib/).
+      - name: Build, test and stage the function app
+        run: ./mvnw -B -ntp verify
+
+      - name: Check the staged function app
+        run: |
+          stage="target/azure-functions/func-consignado-gw-km01"
+          test -f "$stage/host.json"
+          test "$(ls "$stage"/*/function.json | wc -l)" -eq 13
+          rm -f "$stage/local.settings.json"
+
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Flex Consumption: the action uploads the staged folder with "one deploy". No remote build:
+      # the package is already built by Maven.
+      - uses: Azure/functions-action@c5060b3b8bb1ebbcb531abd00c822ecbaa8ea656 # v1.5.7
+        with:
+          app-name: ${{ vars.GATEWAY_APP_NAME }}
+          package: gateway/target/azure-functions/func-consignado-gw-km01
+          sku: flexconsumption
+          remote-build: false
