@@ -13,16 +13,21 @@ import java.time.Duration;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-/** Cloudflare Turnstile. No secret in Key Vault yet: accept and log. Cloudflare does not answer: refuse. */
+/**
+ * Cloudflare Turnstile. Fails closed: no secret, a Key Vault error, or no answer from Cloudflare = refuse.
+ * The hostname of the answer must be one of the site hosts (TURNSTILE_HOSTNAMES).
+ */
 public final class TurnstileBotCheck implements BotCheck {
     private static final Logger LOG = Logger.getLogger("consignado.gateway");
     public static final String SECRET_NAME = "turnstile-secret";
     private static final URI VERIFY = URI.create("https://challenges.cloudflare.com/turnstile/v0/siteverify");
 
     private final Secrets secrets;
+    private final java.util.Set<String> hostnames;
 
-    public TurnstileBotCheck(Secrets secrets) {
+    public TurnstileBotCheck(Secrets secrets, java.util.Collection<String> hostnames) {
         this.secrets = secrets;
+        this.hostnames = java.util.Set.copyOf(hostnames);
     }
 
     @Override
@@ -35,8 +40,8 @@ public final class TurnstileBotCheck implements BotCheck {
             return false;
         }
         if (!secret.found() || secret.value().isBlank()) {
-            LOG.warning("bot check not configured");
-            return true;
+            LOG.warning("bot check not configured: request refused (secret turnstile-secret has no value)");
+            return false;
         }
         if (token == null || token.isBlank()) return false;
         try {
@@ -46,10 +51,27 @@ public final class TurnstileBotCheck implements BotCheck {
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .POST(HttpRequest.BodyPublishers.ofString(form)).build();
             HttpResponse<String> response = Http.CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
-            return response.statusCode() == 200 && Json.MAPPER.readTree(response.body()).path("success").asBoolean(false);
+            return response.statusCode() == 200 && accepted(response.body(), hostnames);
         } catch (Exception e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             LOG.log(Level.WARNING, Logs.fmt("bot check call failed: {0}", e.getClass().getSimpleName()));
+            return false;
+        }
+    }
+
+    /** success must be true and hostname must be one of the site hosts. */
+    static boolean accepted(String body, java.util.Set<String> hostnames) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode n = Json.MAPPER.readTree(body);
+            if (!n.path("success").asBoolean(false)) return false;
+            String host = n.path("hostname").asText("");
+            if (!hostnames.contains(host)) {
+                LOG.warning(Logs.fmt("bot check: token from another hostname refused: {0}",
+                        host.length() > 80 ? host.substring(0, 80) : host));
+                return false;
+            }
+            return true;
+        } catch (Exception e) {
             return false;
         }
     }

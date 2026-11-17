@@ -53,6 +53,14 @@ public class HttpFunctions {
         return call(req, null, context, Handlers::snapshot);
     }
 
+    @FunctionName("status")
+    public HttpResponseMessage status(
+            @HttpTrigger(name = "req", methods = {HttpMethod.GET, HttpMethod.OPTIONS}, route = "status",
+                    authLevel = AuthorizationLevel.ANONYMOUS) HttpRequestMessage<Optional<String>> req,
+            ExecutionContext context) {
+        return call(req, null, context, Handlers::status);
+    }
+
     @FunctionName("contact")
     public HttpResponseMessage contact(
             @HttpTrigger(name = "req", methods = {HttpMethod.POST, HttpMethod.OPTIONS}, route = "contact",
@@ -91,6 +99,14 @@ public class HttpFunctions {
                     authLevel = AuthorizationLevel.ANONYMOUS) HttpRequestMessage<Optional<String>> req,
             @BindingName("id") String id, ExecutionContext context) {
         return call(req, id, context, Handlers::sessionsGet);
+    }
+
+    @FunctionName("sessionsEnd")
+    public HttpResponseMessage sessionsEnd(
+            @HttpTrigger(name = "req", methods = {HttpMethod.POST, HttpMethod.OPTIONS}, route = "sessions/{id}/end",
+                    authLevel = AuthorizationLevel.ANONYMOUS) HttpRequestMessage<Optional<String>> req,
+            @BindingName("id") String id, ExecutionContext context) {
+        return call(req, id, context, Handlers::sessionsEnd);
     }
 
     @FunctionName("proxyFunctions")

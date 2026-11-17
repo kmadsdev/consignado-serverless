@@ -13,6 +13,8 @@ import dev.kmads.consignado.gateway.core.HostKind;
 import dev.kmads.consignado.gateway.core.Json;
 import dev.kmads.consignado.gateway.core.ProxyService;
 import dev.kmads.consignado.gateway.core.RateGuard;
+import dev.kmads.consignado.gateway.core.RetentionService;
+import dev.kmads.consignado.gateway.core.StatusService;
 import dev.kmads.consignado.gateway.core.Session;
 import dev.kmads.consignado.gateway.core.Settings;
 import dev.kmads.consignado.gateway.core.SnapshotService;
@@ -65,11 +67,16 @@ public final class Handlers {
     private final RateGuard sessionGuard;
     private final RateGuard contactGuard;
     private final boolean edgeKeyRequired;
+    private final RetentionService retention;
+    private final StatusService status;
 
     public Handlers(TokenVerifier verifier, UserService users, EngineService engine, ProxyService proxy,
                     ContactService contacts, AdminService admin, SnapshotService snapshot, Secrets secrets,
                     Hasher hasher, AuditLog audit, Settings settings, boolean allowDevOrigin, LongSupplier nanos,
-                    RateGuard sessionGuard, RateGuard contactGuard, boolean edgeKeyRequired) {
+                    RateGuard sessionGuard, RateGuard contactGuard, boolean edgeKeyRequired,
+                    RetentionService retention, StatusService status) {
+        this.retention = retention;
+        this.status = status;
         this.verifier = verifier;
         this.users = users;
         this.engine = engine;
@@ -111,6 +118,32 @@ public final class Handlers {
             return GatewayResponse.json(201,
                     contacts.create(json(req), ip, caller.guest() ? null : caller.claims().oid()));
         });
+    }
+
+    /** GET /api/status?host=functions|aks: anyone for functions, a signed-in user for aks. Cached 15 s per host. */
+    public GatewayResponse status(GatewayRequest req) {
+        return run(req, () -> {
+            String host = queryValue(req.rawQuery(), "host");
+            HostKind kind;
+            if ("functions".equals(host)) {
+                kind = HostKind.FUNCTIONS;
+            } else if ("aks".equals(host)) {
+                requireUser(req);
+                kind = HostKind.AKS;
+            } else {
+                throw ApiException.badRequest("Query host must be functions or aks");
+            }
+            return GatewayResponse.json(200, status.status(kind));
+        });
+    }
+
+    private static String queryValue(String rawQuery, String name) {
+        if (rawQuery == null) return null;
+        for (String part : rawQuery.split("&")) {
+            int eq = part.indexOf('=');
+            if (eq > 0 && part.substring(0, eq).equals(name)) return part.substring(eq + 1);
+        }
+        return null;
     }
 
     // ------------------------------------------------------------------- user
@@ -160,15 +193,29 @@ public final class Handlers {
         });
     }
 
+    /** POST /api/sessions/{id}/end: the owner of the window (or the admin) ends it early. */
+    public GatewayResponse sessionsEnd(GatewayRequest req) {
+        return run(req, () -> {
+            Caller caller = requireUser(req);
+            Session s = engine.endByUser(Validate.sessionId(req.pathParam()), caller.claims().oid(),
+                    users.isAdmin(caller.claims()), hasher.hash(clientIp(req)));
+            return GatewayResponse.json(200, Views.session(s));
+        });
+    }
+
     // ------------------------------------------------------------------ proxy
 
     public GatewayResponse proxy(HostKind host, GatewayRequest req) {
         long start = nanos.getAsLong();
         return run(req, () -> {
             Caller caller = authenticate(req);
+            if (caller.guest() && engine.pausedForBudget()) {
+                // Anonymous load must not keep spending after the budget is reached.
+                throw new ApiException(503, "paused", "The demo is paused because its monthly budget is used");
+            }
             User user = caller.guest() ? null : users.me(caller.claims(), clientIp(req));
             ProxyService.Result r = proxy.forward(host, req.method(), req.pathParam(), req.rawQuery(), req.headers(),
-                    req.body(), user, caller.identityMs(), start);
+                    req.body(), user, !caller.guest() && users.isAdmin(caller.claims()), caller.identityMs(), start);
             GatewayResponse response = GatewayResponse.raw(r.status(), r.contentType(), r.body());
             response.headers().put("x-consignado-host", r.host().id());
             response.headers().put("x-consignado-trace", TraceBuilder.encode(r.trace()));
@@ -211,7 +258,13 @@ public final class Handlers {
      */
     public GatewayResponse budgetHook(GatewayRequest req) {
         return run(req, false, () -> {
-            if (belowBudget(req.body())) {
+            Boolean below = belowBudget(req.body());
+            if (below == null) {
+                // A body that cannot be read does not pause any more (L3). The timer's own cost check stays.
+                audit.record("budget-alert", "budget.alert.unreadable", "engine", null);
+                throw ApiException.badRequest("The body is not a budget alert");
+            }
+            if (below) {
                 audit.record("budget-alert", "budget.alert.early", "engine", null);
                 return GatewayResponse.json(200, Map.of("status", "noted"));
             }
@@ -220,7 +273,7 @@ public final class Handlers {
         });
     }
 
-    /** The timer: sessions and cluster first, then the snapshot. */
+    /** The timer: sessions and cluster first, then the snapshot, then the daily retention job. */
     public void reaper() {
         try {
             engine.tick();
@@ -228,25 +281,37 @@ public final class Handlers {
             LOG.log(Level.WARNING, Logs.fmt("reaper: engine tick failed: {0}", Logs.of(e)));
         }
         try {
+            admin.checkBudgetIfDue();
+        } catch (RuntimeException e) {
+            LOG.log(Level.WARNING, Logs.fmt("reaper: budget check failed: {0}", Logs.of(e)));
+        }
+        try {
             snapshot.refreshIfDue();
         } catch (RuntimeException e) {
             LOG.log(Level.WARNING, Logs.fmt("reaper: snapshot refresh failed: {0}", Logs.of(e)));
+        }
+        try {
+            retention.runIfDue();
+        } catch (RuntimeException e) {
+            LOG.log(Level.WARNING, Logs.fmt("reaper: retention failed: {0}", Logs.of(e)));
         }
     }
 
     // ---------------------------------------------------------------- helpers
 
-    private static boolean belowBudget(byte[] body) {
+    /** True: an early alert. False: at or above the budget. Null: not a budget alert body. */
+    private static Boolean belowBudget(byte[] body) {
         try {
             JsonNode data = Json.MAPPER.readTree(body).path("data");
             JsonNode spent = data.path("SpendingAmount");
             JsonNode budget = data.path("Budget");
-            if (spent.isMissingNode() || budget.isMissingNode()) return false;
+            if (spent.isMissingNode() || budget.isMissingNode()) return null;
             double s = Double.parseDouble(spent.asText());
             double b = Double.parseDouble(budget.asText());
+            if (Double.isNaN(s) || Double.isNaN(b)) return null;
             return b > 0 && s < b;
         } catch (Exception e) {
-            return false;
+            return null;
         }
     }
 
@@ -258,24 +323,34 @@ public final class Handlers {
      * The edge key proves that the request came through the Cloudflare Worker. It is checked before
      * anything else, and a refusal says nothing about the reason.
      */
-    private boolean edgeKeyOk(GatewayRequest req) {
-        String sent = req.header("x-edge-key");
-        if (sent == null || sent.isEmpty() || sent.length() > 512) return false;
+    private enum Edge { OK, REFUSED, UNAVAILABLE }
+
+    /** The secret that cannot be read (Key Vault error, or no value) gives 503: never a pass. */
+    private Edge edgeKey(GatewayRequest req) {
         String expected;
         try {
             expected = secrets.read(EDGE_KEY).value();
         } catch (RuntimeException e) {
-            return false;
+            LOG.log(Level.WARNING, Logs.fmt("edge key could not be read: {0}", e.getClass().getSimpleName()));
+            return Edge.UNAVAILABLE;
         }
-        if (expected == null || expected.isEmpty()) return false;
+        if (expected == null || expected.isEmpty()) {
+            LOG.log(Level.WARNING, "edge key: the secret edge-key has no value");
+            return Edge.UNAVAILABLE;
+        }
+        String sent = req.header("x-edge-key");
+        if (sent == null || sent.isEmpty() || sent.length() > 512) return Edge.REFUSED;
         return java.security.MessageDigest.isEqual(sent.getBytes(StandardCharsets.UTF_8),
-                expected.getBytes(StandardCharsets.UTF_8));
+                expected.getBytes(StandardCharsets.UTF_8)) ? Edge.OK : Edge.REFUSED;
     }
 
     private GatewayResponse run(GatewayRequest req, boolean edgeRoute, Supplier<GatewayResponse> action) {
         GatewayResponse response;
-        if (edgeKeyRequired && edgeRoute && !edgeKeyOk(req)) {
-            response = GatewayResponse.json(403, new Views.ErrorBody("forbidden", "Not allowed"));
+        Edge edge = edgeKeyRequired && edgeRoute ? edgeKey(req) : Edge.OK;
+        if (edge != Edge.OK) {
+            response = edge == Edge.UNAVAILABLE
+                    ? GatewayResponse.json(503, new Views.ErrorBody("unavailable", "Service unavailable"))
+                    : GatewayResponse.json(403, new Views.ErrorBody("forbidden", "Not allowed"));
             response.headers().put("Cache-Control", "no-store");
             response.headers().put("X-Content-Type-Options", "nosniff");
             return response;

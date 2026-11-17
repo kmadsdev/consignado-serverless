@@ -14,8 +14,6 @@ import java.time.Duration;
 /** The HTTP client for the two API hosts. Connect 5 s; total 30 s for Functions (cold start), 10 s for AKS. */
 public final class HttpUpstream implements Upstream {
     private static final java.util.logging.Logger LOG = java.util.logging.Logger.getLogger("consignado.gateway");
-    private static final Duration FUNCTIONS_TIMEOUT = Duration.ofSeconds(30);
-    private static final Duration AKS_TIMEOUT = Duration.ofSeconds(10);
 
     private final String functionsBaseUrl;
     private final String aksBaseUrl;
@@ -34,7 +32,7 @@ public final class HttpUpstream implements Upstream {
                 + (request.query() == null ? "" : "?" + request.query());
         try {
             HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
-                    .timeout(functions ? FUNCTIONS_TIMEOUT : AKS_TIMEOUT);
+                    .timeout(request.host().upstreamTimeout());
             request.headers().forEach(builder::header);
             HttpRequest.BodyPublisher body = request.body() == null ? HttpRequest.BodyPublishers.noBody()
                     : HttpRequest.BodyPublishers.ofByteArray(request.body());

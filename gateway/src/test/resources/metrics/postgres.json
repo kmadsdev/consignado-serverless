@@ -1,0 +1,201 @@
+{
+ "cost": 48,
+ "interval": "PT1M",
+ "namespace": "Microsoft.DBforPostgreSQL/flexibleServers",
+ "resourceregion": "northcentralus",
+ "timespan": "2026-11-17T20:44:28Z/2026-11-17T20:49:28Z",
+ "value": [
+  {
+   "displayDescription": "CPU percent",
+   "errorCode": "Success",
+   "id": "<id removed>",
+   "name": {
+    "localizedValue": "CPU percent",
+    "value": "cpu_percent"
+   },
+   "timeseries": [
+    {
+     "data": [
+      {
+       "average": 7.022578095269348,
+       "maximum": 7.580372250423012,
+       "timeStamp": "2026-11-17T20:44:00Z",
+       "total": 14.045156190538696
+      },
+      {
+       "average": 7.4018140062377915,
+       "maximum": 7.556760420196543,
+       "timeStamp": "2026-11-17T20:45:00Z",
+       "total": 14.803628012475583
+      },
+      {
+       "average": 7.590822295589956,
+       "maximum": 7.876943881000676,
+       "timeStamp": "2026-11-17T20:46:00Z",
+       "total": 15.181644591179912
+      },
+      {
+       "average": 8.866780483458927,
+       "maximum": 10.311020960108182,
+       "timeStamp": "2026-11-17T20:47:00Z",
+       "total": 17.733560966917853
+      },
+      {
+       "average": 7.135496367192918,
+       "maximum": 7.421213148085395,
+       "timeStamp": "2026-11-17T20:48:00Z",
+       "total": 14.270992734385835
+      }
+     ],
+     "metadatavalues": []
+    }
+   ],
+   "type": "Microsoft.Insights/metrics",
+   "unit": "Percent"
+  },
+  {
+   "displayDescription": "Memory percent",
+   "errorCode": "Success",
+   "id": "<id removed>",
+   "name": {
+    "localizedValue": "Memory percent",
+    "value": "memory_percent"
+   },
+   "timeseries": [
+    {
+     "data": [
+      {
+       "average": 59.23083815081869,
+       "maximum": 59.51418570413344,
+       "timeStamp": "2026-11-17T20:44:00Z",
+       "total": 118.46167630163738
+      },
+      {
+       "average": 59.17779320821107,
+       "maximum": 59.18064399207482,
+       "timeStamp": "2026-11-17T20:45:00Z",
+       "total": 118.35558641642214
+      },
+      {
+       "average": 58.51773493004381,
+       "maximum": 58.78866121080936,
+       "timeStamp": "2026-11-17T20:46:00Z",
+       "total": 117.03546986008762
+      },
+      {
+       "average": 59.10988346402821,
+       "maximum": 59.22605290647597,
+       "timeStamp": "2026-11-17T20:47:00Z",
+       "total": 118.21976692805642
+      },
+      {
+       "average": 59.55226403145636,
+       "maximum": 59.66425911181793,
+       "timeStamp": "2026-11-17T20:48:00Z",
+       "total": 119.10452806291272
+      }
+     ],
+     "metadatavalues": []
+    }
+   ],
+   "type": "Microsoft.Insights/metrics",
+   "unit": "Percent"
+  },
+  {
+   "displayDescription": "Active Connections",
+   "errorCode": "Success",
+   "id": "<id removed>",
+   "name": {
+    "localizedValue": "Active Connections",
+    "value": "active_connections"
+   },
+   "timeseries": [
+    {
+     "data": [
+      {
+       "average": 28.5,
+       "maximum": 29,
+       "timeStamp": "2026-11-17T20:44:00Z",
+       "total": 57
+      },
+      {
+       "average": 28,
+       "maximum": 28,
+       "timeStamp": "2026-11-17T20:45:00Z",
+       "total": 56
+      },
+      {
+       "average": 28,
+       "maximum": 28,
+       "timeStamp": "2026-11-17T20:46:00Z",
+       "total": 56
+      },
+      {
+       "average": 28.5,
+       "maximum": 29,
+       "timeStamp": "2026-11-17T20:47:00Z",
+       "total": 57
+      },
+      {
+       "average": 29,
+       "maximum": 29,
+       "timeStamp": "2026-11-17T20:48:00Z",
+       "total": 58
+      }
+     ],
+     "metadatavalues": []
+    }
+   ],
+   "type": "Microsoft.Insights/metrics",
+   "unit": "Count"
+  },
+  {
+   "displayDescription": "Indicates if the database is up or not",
+   "errorCode": "Success",
+   "id": "<id removed>",
+   "name": {
+    "localizedValue": "Database Is Alive",
+    "value": "is_db_alive"
+   },
+   "timeseries": [
+    {
+     "data": [
+      {
+       "average": 1,
+       "maximum": 1,
+       "timeStamp": "2026-11-17T20:44:00Z",
+       "total": 6
+      },
+      {
+       "average": 1,
+       "maximum": 1,
+       "timeStamp": "2026-11-17T20:45:00Z",
+       "total": 6
+      },
+      {
+       "average": 1,
+       "maximum": 1,
+       "timeStamp": "2026-11-17T20:46:00Z",
+       "total": 6
+      },
+      {
+       "average": 1,
+       "maximum": 1,
+       "timeStamp": "2026-11-17T20:47:00Z",
+       "total": 6
+      },
+      {
+       "average": 1,
+       "maximum": 1,
+       "timeStamp": "2026-11-17T20:48:00Z",
+       "total": 6
+      }
+     ],
+     "metadatavalues": []
+    }
+   ],
+   "type": "Microsoft.Insights/metrics",
+   "unit": "Count"
+  }
+ ]
+}

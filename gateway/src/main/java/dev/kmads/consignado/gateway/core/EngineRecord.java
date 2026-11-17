@@ -20,4 +20,8 @@ public final class EngineRecord {
     /** Set when the cluster runs but no window asked for it (for example a CI deploy started it). */
     public Instant externalSince;
     public Instant lastSnapshotAt;
+    /** The last run of the daily retention job. */
+    public Instant lastRetentionAt;
+    /** The last cost check of the timer's budget guard. */
+    public Instant lastBudgetCheckAt;
 }

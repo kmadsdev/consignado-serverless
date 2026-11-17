@@ -15,6 +15,7 @@ import java.util.regex.Pattern;
 
 /** The rules of /api/fn/** and /api/aks/**: who may call what, what is forwarded, and the trace. */
 public final class ProxyService {
+    private static final java.util.logging.Logger LOG = java.util.logging.Logger.getLogger("consignado.gateway");
     public static final int MAX_BODY_BYTES = 64 * 1024;
     public static final String HOST_KEY = "apifn-host-key";
     public static final String GUEST_PATH = "api/v1/simulations/preview";
@@ -48,6 +49,12 @@ public final class ProxyService {
      */
     public Result forward(HostKind host, String method, String rawPath, String rawQuery, Map<String, String> headers,
                           byte[] body, User user, long identityMs, long startNanos) {
+        return forward(host, method, rawPath, rawQuery, headers, body, user, false, identityMs, startNanos);
+    }
+
+    /** admin is true for the owner: only the owner may write agreements (their names are public in the snapshot). */
+    public Result forward(HostKind host, String method, String rawPath, String rawQuery, Map<String, String> headers,
+                          byte[] body, User user, boolean admin, long identityMs, long startNanos) {
         String m = method == null ? "" : method.toUpperCase(Locale.ROOT);
         if (!METHODS.contains(m)) throw new ApiException(405, "method-not-allowed", "Method not allowed");
         String path = cleanPath(rawPath);
@@ -65,9 +72,12 @@ public final class ProxyService {
             }
         } else if (User.BLOCKED.equals(user.status)) {
             throw new ApiException(403, "blocked", "This account is blocked");
+        } else if (!admin && !m.equals("GET") && isAgreementPath(path)) {
+            // Agreement names are free text and the public snapshot shows them: only the owner writes them.
+            throw ApiException.forbidden();
         }
         Instant now = clock.instant();
-        if (host == HostKind.AKS) requireOpenWindow(user, now);
+        Session window = host == HostKind.AKS ? requireOpenWindow(user, now) : null;
 
         Map<String, String> out = new LinkedHashMap<>();
         for (String name : FORWARDED) {
@@ -93,7 +103,8 @@ public final class ProxyService {
             kvCached = key.cached();
             kvMs = kvCached ? 0 : ms(t);
             if (!key.found()) {
-                return failure(host, now, guest, identityMs, kvMs, kvCached, kvUsed, -1, 502, startNanos);
+                return failure(host, now, guest, identityMs, kvMs, kvCached, kvUsed, -1, 502, startNanos,
+                        "function key not found in Key Vault");
             }
             out.put("x-functions-key", key.value());
         }
@@ -105,9 +116,11 @@ public final class ProxyService {
                     body == null || body.length == 0 ? null : body));
         } catch (Upstream.UpstreamException e) {
             return failure(host, now, guest, identityMs, kvMs, kvCached, kvUsed, ms(t), e.timeout() ? 504 : 502,
-                    startNanos);
+                    startNanos, e.timeout() ? "timeout after " + host.upstreamTimeout().toSeconds() + " s"
+                            : "no answer from the API host (connection failed)");
         }
         long upstreamMs = ms(t);
+        if (window != null && response.status() >= 200 && response.status() < 400) countRequest(window);
         Views.RequestTrace trace = TraceBuilder.forProxy(host, now, guest, identityMs, kvMs, kvCached, kvUsed,
                 upstreamMs, response.status(), ms(startNanos));
         String contentType = response.contentType() == null ? "application/json" : response.contentType();
@@ -116,20 +129,42 @@ public final class ProxyService {
     }
 
     private Result failure(HostKind host, Instant now, boolean guest, long identityMs, long kvMs, boolean kvCached,
-                           boolean kvUsed, long upstreamMs, int status, long startNanos) {
+                           boolean kvUsed, long upstreamMs, int status, long startNanos, String detail) {
         Views.RequestTrace trace = TraceBuilder.forProxy(host, now, guest, identityMs, kvMs, kvCached, kvUsed,
-                upstreamMs < 0 ? -1 : upstreamMs, 0, ms(startNanos));
+                upstreamMs < 0 ? -1 : upstreamMs, 0, ms(startNanos), detail);
         Views.ErrorBody error = status == 504
                 ? new Views.ErrorBody("upstream-timeout", "The API host did not answer in time")
                 : new Views.ErrorBody("upstream-unavailable", "The API host is not available now");
         return new Result(status, "application/json", Json.bytes(error), host, trace);
     }
 
-    private void requireOpenWindow(User user, Instant now) {
+    /**
+     * One table write per answered AKS call: requests + 1 with the ETag; on a conflict (timer or poll wrote
+     * the row) read it again once; a second conflict drops the count of this call (logged), never the answer.
+     */
+    private void countRequest(Session window) {
+        Session s = window;
+        for (int attempt = 0; attempt < 2 && s != null; attempt++) {
+            s.requests = s.requests + 1;
+            try {
+                sessions.save(s);
+                return;
+            } catch (SessionStore.ConflictException e) {
+                s = sessions.find(window.id).orElse(null);
+            } catch (RuntimeException e) {
+                LOG.warning(Logs.fmt("session {0}: request count not written: {1}", window.id, Logs.of(e)));
+                return;
+            }
+        }
+        LOG.warning(Logs.fmt("session {0}: request count not written (row changed twice)", window.id));
+    }
+
+    private Session requireOpenWindow(User user, Instant now) {
         Session session = user.activeSessionId == null ? null : sessions.find(user.activeSessionId).orElse(null);
         boolean open = session != null && session.userId.equals(user.id) && Session.READY.equals(session.state)
                 && session.expiresAt != null && now.isBefore(session.expiresAt);
         if (!open) throw new ApiException(403, "no-session", "An open access window is required for this host");
+        return session;
     }
 
     static String cleanPath(String rawPath) {
@@ -145,4 +180,10 @@ public final class ProxyService {
     private long ms(long fromNanos) {
         return Math.max(0, (nanos.getAsLong() - fromNanos) / 1_000_000);
     }
+
+    static boolean isAgreementPath(String path) {
+        return path.equals(AGREEMENTS) || path.startsWith(AGREEMENTS + "/");
+    }
+
+    private static final String AGREEMENTS = "api/v1/agreements";
 }

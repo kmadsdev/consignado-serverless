@@ -43,11 +43,13 @@ public final class ContactService {
         if (!botCheck.verify(token, clientIp)) {
             throw new ApiException(403, "bot-check-failed", "The bot check did not pass. Try again.");
         }
-        Contact contact = new Contact(ids.get(), kind, name, email, message, Times.iso(clock.instant()));
+        // A signed-in sender is linked by the user id: the owner sees whose "more windows" request it is.
+        Contact contact = new Contact(ids.get(), kind, name, email, message, Times.iso(clock.instant()), who);
         contacts.save(contact);
         audit.record(who == null ? "guest" : who, "contact.create", contact.id(), hasher.hash(clientIp));
         mailer.sendToOwner("Consignado: " + (kind.equals("contact") ? "contact request" : "request for more windows"),
-                "From: " + name + " <" + email + ">\nKind: " + kind + "\n\n" + message);
+                "From: " + name + " <" + email + ">\nKind: " + kind
+                        + (who == null ? "\nSigned in: no" : "\nUser id: " + who) + "\n\n" + message);
         return contact;
     }
 

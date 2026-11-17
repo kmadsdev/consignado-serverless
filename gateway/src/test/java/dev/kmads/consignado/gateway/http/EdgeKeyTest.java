@@ -64,10 +64,17 @@ class EdgeKeyTest {
     }
 
     @Test
-    void secretThatDoesNotExistRefusesEverything() {
+    void secretThatCannotBeReadGives503NeverAPass() {
         w.vault.values.remove("edge-key");
-        assertForbidden(w.handlers.health(req("GET", null, "edge-secret-value", null, null)));
-        assertForbidden(w.handlers.health(req("GET", null, "", null, null)));
+        for (String key : new String[] {"edge-secret-value", "", null}) {
+            GatewayResponse r = w.handlers.me(req("GET", null, key, "good-u1", null));
+            assertEquals(503, r.status());
+            assertEquals("unavailable", World.json(r).get("code").asText());
+        }
+        assertTrue(w.users.rows.isEmpty(), "no work done");
+        w.vault.values.put("edge-key", "edge-secret-value");
+        w.vault.down = true;
+        assertEquals(503, w.handlers.engine(req("GET", null, "edge-secret-value", null, null)).status());
     }
 
     @Test
