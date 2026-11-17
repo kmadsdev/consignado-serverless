@@ -45,9 +45,27 @@ public final class Views {
     /** GET /api/status (contract addendum, part 1). */
     public record PlatformStatus(String asOf, String host, List<ServiceStatus> services) {}
 
+    /** build: the code that runs (contract addendum 2, part 3); left out when not known. */
     public record ServiceStatus(String id, String name, String kind,
                                 @JsonInclude(JsonInclude.Include.NON_NULL) String region, String state,
-                                String detail, List<Metric> metrics, List<String> source) {}
+                                String detail, List<Metric> metrics, List<String> source,
+                                @JsonInclude(JsonInclude.Include.NON_NULL) Build build) {
+        public ServiceStatus(String id, String name, String kind, String region, String state, String detail,
+                             List<Metric> metrics, List<String> source) {
+            this(id, name, kind, region, state, detail, metrics, source, null);
+        }
+    }
+
+    /** commit: the git commit of the repository (the image tag of the running pods). */
+    public record Build(String commit, String repository) {
+        public static final String API_REPOSITORY = "kmadsdev/consignado-api";
+        private static final java.util.regex.Pattern COMMIT = java.util.regex.Pattern.compile("^[0-9a-f]{7,40}$");
+
+        /** The build of the API for an image tag, or null when the tag is not a git commit (e.g. "latest"). */
+        public static Build ofApiImageTag(String tag) {
+            return tag != null && COMMIT.matcher(tag).matches() ? new Build(tag, API_REPOSITORY) : null;
+        }
+    }
 
     /** value null = Azure returned no data for the window. */
     public record Metric(String key, String label, Double value, String unit, String window) {}
