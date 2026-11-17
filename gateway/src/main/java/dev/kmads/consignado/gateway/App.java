@@ -20,6 +20,8 @@ import dev.kmads.consignado.gateway.core.Hasher;
 import dev.kmads.consignado.gateway.core.ProxyService;
 import dev.kmads.consignado.gateway.core.RateGuard;
 import dev.kmads.consignado.gateway.core.RetentionService;
+import dev.kmads.consignado.gateway.core.StatusService;
+import dev.kmads.consignado.gateway.adapters.ArmMonitor;
 import dev.kmads.consignado.gateway.core.UserErasure;
 import dev.kmads.consignado.gateway.core.Settings;
 import dev.kmads.consignado.gateway.core.SnapshotService;
@@ -92,10 +94,24 @@ public final class App {
         SnapshotService snapshot = new SnapshotService(upstream, secrets,
                 new BlobSnapshotStore(tokens, config.storageAccount()), engineStore, clock);
 
-        return new Handlers(EntraTokenVerifier.forTenant(config.tenantId(), config.apiAudience(), config.spaClientId()), users, engine,
+        EntraTokenVerifier verifier = EntraTokenVerifier.forTenant(config.tenantId(), config.apiAudience(),
+                config.spaClientId());
+        java.util.concurrent.ExecutorService statusPool = java.util.concurrent.Executors.newFixedThreadPool(12, r -> {
+            Thread t = new Thread(r, "status");
+            t.setDaemon(true);
+            return t;
+        });
+        StatusService status = new StatusService(new ArmMonitor(tokens),
+                new ArmClusterControl(tokens, config.aksResourceId()),
+                new KubeClusterObserver(tokens, config.aksApiServerUrl(), config.aksCaCertB64()), upstream,
+                verifier::signingKeysFetchedAt,
+                new StatusService.Ids(config.gatewayAppId(), config.apiAppId(), config.keyVaultId(),
+                        config.postgresId(), config.aksResourceId()),
+                clock, statusPool);
+        return new Handlers(verifier, users, engine,
                 proxy, contacts, admin, snapshot, secrets, hasher, audit, settings, config.allowDevOrigin(),
                 System::nanoTime, new RateGuard(5, Duration.ofMinutes(10), clock),
-                new RateGuard(3, Duration.ofMinutes(10), clock), config.edgeKeyRequired(), retention);
+                new RateGuard(3, Duration.ofMinutes(10), clock), config.edgeKeyRequired(), retention, status);
     }
 
     private static final SecureRandom RANDOM = new SecureRandom();

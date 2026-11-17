@@ -19,6 +19,12 @@ import java.util.function.Supplier;
 /** Every port as an in-memory fake, wired to the real core and the real handlers. No network. */
 public final class World {
     public static final String ADMIN = "00000000-0000-0000-0000-00000000ad00";
+    private static final java.util.concurrent.ExecutorService STATUS_POOL =
+            java.util.concurrent.Executors.newCachedThreadPool(r -> {
+                Thread t = new Thread(r, "status-test");
+                t.setDaemon(true);
+                return t;
+            });
 
     public static final class TestClock extends Clock {
         public Instant now = Instant.parse("2026-11-17T12:00:00Z");
@@ -87,10 +93,11 @@ public final class World {
         public boolean accept = true;
         public int starts;
         public int stops;
+        public int observations;
         @Override public PowerState powerState() { return power; }
         @Override public boolean start() { starts++; if (accept) power = new PowerState("Running", "Starting"); return accept; }
         @Override public boolean stop() { stops++; if (accept) power = new PowerState("Running", "Stopping"); return accept; }
-        @Override public ClusterView observe() { return view; }
+        @Override public ClusterView observe() { observations++; return view; }
         public void running() { power = new PowerState("Running", "Succeeded"); }
         public void stopped() { power = new PowerState("Stopped", "Succeeded"); }
     }
@@ -127,6 +134,35 @@ public final class World {
             return new Read(values.get(name), !seen.add(name));
         }
     }
+
+    /** Azure Monitor and ARM answers by resource id; a missing entry = Azure did not answer. */
+    public static final class Monitor implements AzureMonitor {
+        public final Map<String, JsonNode> metrics = new HashMap<>();
+        public final Map<String, JsonNode> health = new HashMap<>();
+        public final Map<String, JsonNode> resources = new HashMap<>();
+        public final Set<String> slow = new HashSet<>();
+        public final AtomicInteger calls = new AtomicInteger();
+        private Optional<JsonNode> answer(Map<String, JsonNode> m, String id) {
+            calls.incrementAndGet();
+            if (slow.contains(id)) {
+                try { Thread.sleep(6000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            }
+            return Optional.ofNullable(m.get(id));
+        }
+        @Override public Optional<JsonNode> metrics(String id, List<String> names) { return answer(metrics, id); }
+        @Override public Optional<JsonNode> health(String id) { return answer(health, id); }
+        @Override public Optional<JsonNode> resource(String id) { return answer(resources, id); }
+    }
+
+    public static final String SUB = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-consignado/providers/";
+    public static final StatusService.Ids IDS = new StatusService.Ids(
+            SUB + "Microsoft.Web/sites/func-consignado-gw-km01", SUB + "Microsoft.Web/sites/func-consignado-api-km01",
+            SUB + "Microsoft.KeyVault/vaults/kv-consig-km01",
+            SUB + "Microsoft.DBforPostgreSQL/flexibleServers/psql-consignado-km01",
+            SUB + "Microsoft.ContainerService/managedClusters/aks-consignado");
+
+    public final Monitor monitor = new Monitor();
+    public Instant keysFetchedAt = Instant.parse("2026-11-17T11:57:00Z");
 
     public final TestClock clock = new TestClock();
     public final Users users = new Users();
@@ -216,7 +252,11 @@ public final class World {
         snapshot = new SnapshotService(upstream, vault, snapshotStore, engineStore, clock);
         handlers = new Handlers(verifier, userService, engine, proxy, contacts, admin, snapshot, vault, hasher,
                 auditLog, settings, allowDevOrigin, () -> nanos, new RateGuard(5, Duration.ofMinutes(10), clock),
-                new RateGuard(3, Duration.ofMinutes(10), clock), edgeKeyRequired, retention);
+                new RateGuard(3, Duration.ofMinutes(10), clock), edgeKeyRequired, retention,
+                new StatusService(monitor, cluster, cluster, upstream, () -> {
+                    if (keysFetchedAt == null) throw new IllegalStateException("no keys");
+                    return keysFetchedAt;
+                }, IDS, clock, STATUS_POOL));
     }
 
     // ------------------------------------------------------------ request helpers

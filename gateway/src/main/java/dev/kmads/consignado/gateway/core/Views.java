@@ -32,6 +32,16 @@ public final class Views {
 
     public record ErrorBody(String code, String message) {}
 
+    /** GET /api/status (contract addendum, part 1). */
+    public record PlatformStatus(String asOf, String host, List<ServiceStatus> services) {}
+
+    public record ServiceStatus(String id, String name, String kind,
+                                @JsonInclude(JsonInclude.Include.NON_NULL) String region, String state,
+                                String detail, List<Metric> metrics, List<String> source) {}
+
+    /** value null = Azure returned no data for the window. */
+    public record Metric(String key, String label, Double value, String unit, String window) {}
+
     public static String role(User u, Settings settings) {
         return u.id.equals(settings.adminOid()) ? "admin" : "user";
     }

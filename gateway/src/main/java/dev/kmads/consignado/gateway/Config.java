@@ -11,7 +11,8 @@ public record Config(
         String aksApiServerUrl, String aksCaCertB64, String aksInternalUrl, String apifnBaseUrl,
         String keyVaultUrl, String storageAccount, String ownerEmail, int windowMinutes, int windowsMax,
         int cooldownMinutes, double budgetLimitUsd, String acsEndpoint, String acsSender, boolean allowDevOrigin,
-        boolean edgeKeyRequired, int dailyWindowsMax, String spaClientId, java.util.List<String> turnstileHostnames) {
+        boolean edgeKeyRequired, int dailyWindowsMax, String spaClientId, java.util.List<String> turnstileHostnames,
+        String gatewayAppId, String apiAppId, String keyVaultId, String postgresId) {
 
     /** The only value of EDGE that turns the edge-key check off. Missing or any other value: the key is required. */
     public static final String EDGE_LOCAL = "local";
@@ -53,7 +54,12 @@ public record Config(
                 optionalNumber(env, "DAILY_WINDOWS_MAX", Settings.DEFAULT_DAILY_WINDOWS_MAX, 1, 1000),
                 optional(env, "ENTRA_SPA_CLIENT_ID"),
                 java.util.Arrays.stream(java.util.Objects.requireNonNullElse(optional(env, "TURNSTILE_HOSTNAMES"),
-                        DEFAULT_TURNSTILE_HOSTNAMES).split(",")).map(String::strip).filter(h -> !h.isEmpty()).toList());
+                        DEFAULT_TURNSTILE_HOSTNAMES).split(",")).map(String::strip).filter(h -> !h.isEmpty()).toList(),
+                // Status page (contract addendum): optional; a missing id makes that service "unknown".
+                resourceId(env, "GATEWAY_APP_ID"),
+                resourceId(env, "API_APP_ID"),
+                resourceId(env, "KEY_VAULT_ID"),
+                resourceId(env, "POSTGRES_ID"));
         if (!AKS_ID.matcher(c.aksResourceId).matches()) throw invalid("AKS_RESOURCE_ID");
         if (!STORAGE.matcher(c.storageAccount).matches()) throw invalid("STORAGE_ACCOUNT");
         return c;
@@ -98,6 +104,17 @@ public record Config(
             throw invalid(name);
         }
     }
+
+    /** An ARM resource id, or null. A value that is not an id is an error (it would go into a URL). */
+    private static String resourceId(Function<String, String> env, String name) {
+        String v = optional(env, name);
+        if (v == null) return null;
+        if (!RESOURCE_ID.matcher(v).matches()) throw invalid(name);
+        return v;
+    }
+
+    private static final Pattern RESOURCE_ID = Pattern.compile(
+            "^/subscriptions/[0-9a-fA-F\\-]{36}/resourceGroups/[A-Za-z0-9_.()\\-]{1,90}/providers/[A-Za-z0-9./_\\-]{3,200}$");
 
     private static int optionalNumber(Function<String, String> env, String name, int fallback, int min, int max) {
         return optional(env, name) == null ? fallback : number(env, name, min, max);

@@ -42,7 +42,8 @@ final class KubeParser {
                         : state.has("waiting") ? "waiting" : "unknown";
                 String reason = state.path(kind).path("reason").asText(null);
                 containers.add(new ClusterView.Container(cs.path("name").asText(""), kind, reason,
-                        !cs.path("imageID").asText("").isEmpty()));
+                        !cs.path("imageID").asText("").isEmpty(), cs.path("restartCount").asInt(0),
+                        cs.path("image").asText(null)));
             }
             out.add(new ClusterView.Pod(
                     item.path("metadata").path("name").asText(""),
@@ -53,7 +54,9 @@ final class KubeParser {
                     condition(item, "PodReadyToStartContainers"),
                     condition(item, "ContainersReady"),
                     condition(item, "Ready"),
-                    containers));
+                    containers,
+                    dev.kmads.consignado.gateway.core.Times.parse(
+                            item.path("metadata").path("creationTimestamp").asText(null))));
         }
         return out;
     }

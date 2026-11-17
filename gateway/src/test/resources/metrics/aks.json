@@ -1,0 +1,105 @@
+{
+ "cost": 24,
+ "interval": "PT1M",
+ "namespace": "Microsoft.ContainerService/managedClusters",
+ "resourceregion": "belgiumcentral",
+ "timespan": "2026-11-17T20:44:27Z/2026-11-17T20:49:27Z",
+ "value": [
+  {
+   "displayDescription": "Aggregated average CPU utilization measured in percentage across the cluster",
+   "errorCode": "Success",
+   "id": "<id removed>",
+   "name": {
+    "localizedValue": "CPU Usage Percentage",
+    "value": "node_cpu_usage_percentage"
+   },
+   "timeseries": [
+    {
+     "data": [
+      {
+       "average": 8,
+       "maximum": 8,
+       "timeStamp": "2026-11-17T20:44:00Z",
+       "total": 8
+      },
+      {
+       "average": 9,
+       "maximum": 9,
+       "timeStamp": "2026-11-17T20:45:00Z",
+       "total": 9
+      },
+      {
+       "average": 9,
+       "maximum": 9,
+       "timeStamp": "2026-11-17T20:46:00Z",
+       "total": 9
+      },
+      {
+       "average": 11,
+       "maximum": 11,
+       "timeStamp": "2026-11-17T20:47:00Z",
+       "total": 11
+      },
+      {
+       "average": 11,
+       "maximum": 11,
+       "timeStamp": "2026-11-17T20:48:00Z",
+       "total": 11
+      }
+     ],
+     "metadatavalues": []
+    }
+   ],
+   "type": "Microsoft.Insights/metrics",
+   "unit": "Percent"
+  },
+  {
+   "displayDescription": "Container working set memory used in percent",
+   "errorCode": "Success",
+   "id": "<id removed>",
+   "name": {
+    "localizedValue": "Memory Working Set Percentage",
+    "value": "node_memory_working_set_percentage"
+   },
+   "timeseries": [
+    {
+     "data": [
+      {
+       "average": 31,
+       "maximum": 31,
+       "timeStamp": "2026-11-17T20:44:00Z",
+       "total": 31
+      },
+      {
+       "average": 32,
+       "maximum": 32,
+       "timeStamp": "2026-11-17T20:45:00Z",
+       "total": 32
+      },
+      {
+       "average": 32,
+       "maximum": 32,
+       "timeStamp": "2026-11-17T20:46:00Z",
+       "total": 32
+      },
+      {
+       "average": 32,
+       "maximum": 32,
+       "timeStamp": "2026-11-17T20:47:00Z",
+       "total": 32
+      },
+      {
+       "average": 32,
+       "maximum": 32,
+       "timeStamp": "2026-11-17T20:48:00Z",
+       "total": 32
+      }
+     ],
+     "metadatavalues": []
+    }
+   ],
+   "type": "Microsoft.Insights/metrics",
+   "unit": "Percent"
+  }
+ ]
+}
