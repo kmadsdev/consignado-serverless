@@ -1,0 +1,189 @@
+{
+ "cost": 24,
+ "interval": "PT1M",
+ "namespace": "microsoft.insights/components",
+ "resourceregion": "belgiumcentral",
+ "timespan": "2026-11-17T20:54:02Z/2026-11-17T20:59:02Z",
+ "value": [
+  {
+   "displayDescription": "Count of HTTP requests completed.",
+   "errorCode": "Success",
+   "id": "<id removed>",
+   "name": {
+    "localizedValue": "Server requests",
+    "value": "requests/count"
+   },
+   "timeseries": [
+    {
+     "data": [
+      {
+       "average": 21.370757894736844,
+       "count": 38,
+       "timeStamp": "2026-11-17T20:54:00Z"
+      },
+      {
+       "average": 84.6403306122449,
+       "count": 49,
+       "timeStamp": "2026-11-17T20:55:00Z"
+      },
+      {
+       "average": 18.276959374999997,
+       "count": 32,
+       "timeStamp": "2026-11-17T20:56:00Z"
+      },
+      {
+       "average": 76.86217500000001,
+       "count": 32,
+       "timeStamp": "2026-11-17T20:57:00Z"
+      },
+      {
+       "average": 188.43678536585367,
+       "count": 41,
+       "timeStamp": "2026-11-17T20:58:00Z"
+      }
+     ],
+     "metadatavalues": [
+      {
+       "name": {
+        "localizedValue": "cloud/rolename",
+        "value": "cloud/rolename"
+       },
+       "value": "func-consignado-gw-km01"
+      }
+     ]
+    },
+    {
+     "data": [
+      {
+       "average": 0,
+       "count": 0,
+       "timeStamp": "2026-11-17T20:54:00Z"
+      },
+      {
+       "average": 0,
+       "count": 0,
+       "timeStamp": "2026-11-17T20:55:00Z"
+      },
+      {
+       "average": 0,
+       "count": 0,
+       "timeStamp": "2026-11-17T20:56:00Z"
+      },
+      {
+       "average": 0,
+       "count": 0,
+       "timeStamp": "2026-11-17T20:57:00Z"
+      },
+      {
+       "average": 0,
+       "count": 0,
+       "timeStamp": "2026-11-17T20:58:00Z"
+      }
+     ],
+     "metadatavalues": [
+      {
+       "name": {
+        "localizedValue": "cloud/rolename",
+        "value": "cloud/rolename"
+       },
+       "value": "func-consignado-api-km01"
+      }
+     ]
+    }
+   ],
+   "type": "Microsoft.Insights/metrics",
+   "unit": "Count"
+  },
+  {
+   "displayDescription": "Count of HTTP requests marked as failed. In most cases these are requests with a response code >= 400 and not equal to 401.",
+   "errorCode": "Success",
+   "id": "<id removed>",
+   "name": {
+    "localizedValue": "Failed requests",
+    "value": "requests/failed"
+   },
+   "timeseries": [],
+   "type": "Microsoft.Insights/metrics",
+   "unit": "Count"
+  },
+  {
+   "displayDescription": "Time between receiving an HTTP request and finishing sending the response.",
+   "errorCode": "Success",
+   "id": "<id removed>",
+   "name": {
+    "localizedValue": "Server response time",
+    "value": "requests/duration"
+   },
+   "timeseries": [
+    {
+     "data": [
+      {
+       "average": 21.370757894736844,
+       "count": 38,
+       "timeStamp": "2026-11-17T20:54:00Z"
+      },
+      {
+       "average": 84.6403306122449,
+       "count": 49,
+       "timeStamp": "2026-11-17T20:55:00Z"
+      },
+      {
+       "average": 18.276959374999997,
+       "count": 32,
+       "timeStamp": "2026-11-17T20:56:00Z"
+      },
+      {
+       "average": 76.86217500000001,
+       "count": 32,
+       "timeStamp": "2026-11-17T20:57:00Z"
+      },
+      {
+       "average": 188.43678536585367,
+       "count": 41,
+       "timeStamp": "2026-11-17T20:58:00Z"
+      }
+     ],
+     "metadatavalues": [
+      {
+       "name": {
+        "localizedValue": "cloud/rolename",
+        "value": "cloud/rolename"
+       },
+       "value": "func-consignado-gw-km01"
+      }
+     ]
+    },
+    {
+     "data": [
+      {
+       "timeStamp": "2026-11-17T20:54:00Z"
+      },
+      {
+       "timeStamp": "2026-11-17T20:55:00Z"
+      },
+      {
+       "timeStamp": "2026-11-17T20:56:00Z"
+      },
+      {
+       "timeStamp": "2026-11-17T20:57:00Z"
+      },
+      {
+       "timeStamp": "2026-11-17T20:58:00Z"
+      }
+     ],
+     "metadatavalues": [
+      {
+       "name": {
+        "localizedValue": "cloud/rolename",
+        "value": "cloud/rolename"
+       },
+       "value": "func-consignado-api-km01"
+      }
+     ]
+    }
+   ],
+   "type": "Microsoft.Insights/metrics",
+   "unit": "MilliSeconds"
+  }
+ ]
+}

@@ -281,8 +281,12 @@ class EngineServiceTest {
     void earlyBudgetAlertChangesNothing() {
         w.handlers.budgetHook(World.req("POST", null, null, null, "{\"data\":{\"SpendingAmount\":30,\"Budget\":60}}"));
         assertFalse(w.engineRow.paused);
-        w.handlers.budgetHook(World.req("POST", null, null, null, "not json"));
-        assertTrue(w.engineRow.paused, "a body that cannot be read pauses: the safe side");
+        // L3: a body that is not a budget alert is refused and pauses nothing (the timer's cost check stays).
+        for (String body : new String[] {"not json", "{}", "{\"data\":{\"SpendingAmount\":\"x\",\"Budget\":60}}"}) {
+            assertEquals(400, w.handlers.budgetHook(World.req("POST", null, null, null, body)).status());
+        }
+        assertFalse(w.engineRow.paused);
+        assertTrue(w.audit.contains("budget.alert.unreadable"));
     }
 
     @Test

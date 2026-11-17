@@ -19,6 +19,12 @@ import java.util.function.Supplier;
 /** Every port as an in-memory fake, wired to the real core and the real handlers. No network. */
 public final class World {
     public static final String ADMIN = "00000000-0000-0000-0000-00000000ad00";
+    private static final java.util.concurrent.ExecutorService STATUS_POOL =
+            java.util.concurrent.Executors.newCachedThreadPool(r -> {
+                Thread t = new Thread(r, "status-test");
+                t.setDaemon(true);
+                return t;
+            });
 
     public static final class TestClock extends Clock {
         public Instant now = Instant.parse("2026-11-17T12:00:00Z");
@@ -28,11 +34,34 @@ public final class World {
         @Override public Instant instant() { return now; }
     }
 
+    /** Users with copies and ETags, like the table: a stale write gets ConflictException. */
     public static final class Users implements UserStore {
         public final Map<String, User> rows = new LinkedHashMap<>();
-        @Override public Optional<User> find(String id) { return Optional.ofNullable(rows.get(id)); }
-        @Override public void save(User user) { rows.put(user.id, user); }
-        @Override public List<User> list() { return new ArrayList<>(rows.values()); }
+        private int version;
+        /** Runs before each save: a test can make another writer change the row first. */
+        public Runnable beforeSave = () -> { };
+        public static User copy(User u) {
+            User c = new User();
+            c.id = u.id; c.email = u.email; c.name = u.name; c.company = u.company; c.linkedin = u.linkedin;
+            c.status = u.status; c.windowsUsed = u.windowsUsed; c.windowsMax = u.windowsMax; c.windowMinutes = u.windowMinutes;
+            c.flags = new TreeSet<>(u.flags); c.ipHash = u.ipHash; c.fingerprintHash = u.fingerprintHash;
+            c.createdAt = u.createdAt; c.lastSeenAt = u.lastSeenAt; c.consentAt = u.consentAt;
+            c.approvedByAdmin = u.approvedByAdmin; c.activeSessionId = u.activeSessionId;
+            c.mailboxHash = u.mailboxHash; c.etag = u.etag;
+            return c;
+        }
+        @Override public Optional<User> find(String id) { return Optional.ofNullable(rows.get(id)).map(Users::copy); }
+        @Override public void save(User user) {
+            Runnable hook = beforeSave;
+            beforeSave = () -> { };
+            hook.run();
+            User stored = rows.get(user.id);
+            if (user.etag != null && stored != null && !user.etag.equals(stored.etag)) throw new ConflictException();
+            user.etag = "u" + (++version);
+            rows.put(user.id, copy(user));
+        }
+        @Override public List<User> list() { return rows.values().stream().map(Users::copy).toList(); }
+        @Override public void delete(String id) { rows.remove(id); }
     }
 
     public static final class Sessions implements SessionStore {
@@ -43,6 +72,7 @@ public final class World {
             c.id = s.id; c.userId = s.userId; c.state = s.state; c.requestedAt = s.requestedAt;
             c.readyAt = s.readyAt; c.expiresAt = s.expiresAt; c.endedAt = s.endedAt;
             c.lastObservedAt = s.lastObservedAt; c.events = new ArrayList<>(s.events); c.open = s.open; c.etag = s.etag;
+            c.requests = s.requests;
             return c;
         }
         @Override public Optional<Session> find(String id) { return Optional.ofNullable(rows.get(id)).map(Sessions::copy); }
@@ -54,6 +84,8 @@ public final class World {
         }
         @Override public List<Session> listOpen() { return rows.values().stream().filter(s -> s.open).map(Sessions::copy).toList(); }
         @Override public List<Session> list() { return rows.values().stream().map(Sessions::copy).toList(); }
+        @Override public void delete(String id) { rows.remove(id); }
+        public boolean has(String id) { return rows.containsKey(id); }
     }
 
     public static final class Cluster implements ClusterControl, ClusterObserver {
@@ -62,10 +94,16 @@ public final class World {
         public boolean accept = true;
         public int starts;
         public int stops;
+        public int observations;
+        public Optional<ClusterView.Workload> workload = Optional.empty();
+        public Optional<ClusterView.ImagePull> imagePull = Optional.empty();
+        public int imagePullReads;
+        @Override public Optional<ClusterView.ImagePull> imagePull(String pod) { imagePullReads++; return imagePull; }
+        @Override public Optional<ClusterView.Workload> workload() { return workload; }
         @Override public PowerState powerState() { return power; }
         @Override public boolean start() { starts++; if (accept) power = new PowerState("Running", "Starting"); return accept; }
         @Override public boolean stop() { stops++; if (accept) power = new PowerState("Running", "Stopping"); return accept; }
-        @Override public ClusterView observe() { return view; }
+        @Override public ClusterView observe() { observations++; return view; }
         public void running() { power = new PowerState("Running", "Succeeded"); }
         public void stopped() { power = new PowerState("Stopped", "Succeeded"); }
     }
@@ -95,8 +133,44 @@ public final class World {
     public static final class Vault implements Secrets {
         public final Map<String, String> values = new HashMap<>();
         private final Set<String> seen = new HashSet<>();
-        @Override public Read read(String name) { return new Read(values.get(name), !seen.add(name)); }
+        /** Key Vault does not answer. */
+        public boolean down;
+        @Override public Read read(String name) {
+            if (down) throw new IllegalStateException("Key Vault down");
+            return new Read(values.get(name), !seen.add(name));
+        }
     }
+
+    /** Azure Monitor and ARM answers by resource id; a missing entry = Azure did not answer. */
+    public static final class Monitor implements AzureMonitor {
+        public final Map<String, JsonNode> metrics = new HashMap<>();
+        public final Map<String, JsonNode> health = new HashMap<>();
+        public final Map<String, JsonNode> resources = new HashMap<>();
+        public final Set<String> slow = new HashSet<>();
+        public final AtomicInteger calls = new AtomicInteger();
+        private Optional<JsonNode> answer(Map<String, JsonNode> m, String id) {
+            calls.incrementAndGet();
+            if (slow.contains(id)) {
+                try { Thread.sleep(6000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            }
+            return Optional.ofNullable(m.get(id));
+        }
+        @Override public Optional<JsonNode> metrics(String id, List<String> names) { return answer(metrics, id); }
+        @Override public Optional<JsonNode> health(String id) { return answer(health, id); }
+        @Override public Optional<JsonNode> requestMetrics(String id) { return answer(metrics, id); }
+        @Override public Optional<JsonNode> resource(String id) { return answer(resources, id); }
+    }
+
+    public static final String SUB = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-consignado/providers/";
+    public static final StatusService.Ids IDS = new StatusService.Ids(
+            SUB + "Microsoft.Web/sites/func-consignado-gw-km01", SUB + "Microsoft.Web/sites/func-consignado-api-km01",
+            SUB + "Microsoft.KeyVault/vaults/kv-consig-km01",
+            SUB + "Microsoft.DBforPostgreSQL/flexibleServers/psql-consignado-km01",
+            SUB + "Microsoft.ContainerService/managedClusters/aks-consignado",
+            SUB + "Microsoft.Insights/components/appi-consignado");
+
+    public final Monitor monitor = new Monitor();
+    public Instant keysFetchedAt = Instant.parse("2026-11-17T11:57:00Z");
 
     public final TestClock clock = new TestClock();
     public final Users users = new Users();
@@ -105,10 +179,16 @@ public final class World {
     public final Up upstream = new Up();
     public final Vault vault = new Vault();
     public final List<String> audit = new ArrayList<>();
+    /** Full audit rows: who, action, target, ipHash. */
+    public final List<String[]> auditRows = new ArrayList<>();
+    /** Days of the fake audit table (the partition keys). */
+    public final List<java.time.LocalDate> auditDays = new ArrayList<>();
+    public final RetentionService retention;
     public final List<String> mails = new ArrayList<>();
     public final List<Contact> contactRows = new ArrayList<>();
     public final Map<String, String> blob = new HashMap<>();
     public boolean botOk = true;
+    public boolean mailFails;
     public Optional<CostReader.Cost> cost = Optional.empty();
     public long nanos;
     public EngineRecord engineRow = new EngineRecord();
@@ -125,8 +205,20 @@ public final class World {
     public World(boolean allowDevOrigin, boolean edgeKeyRequired) {
         vault.values.put(ProxyService.HOST_KEY, "host-key-value");
         vault.values.put(Hasher.KEY_NAME, "test-hash-key");
-        AuditLog auditLog = (who, action, target, ipHash) -> audit.add(action);
-        Mailer mailer = (subject, text) -> mails.add(subject);
+        AuditLog auditLog = (who, action, target, ipHash) -> {
+            audit.add(action);
+            auditRows.add(new String[] {who, action, target, ipHash});
+        };
+        AuditStore auditStore = day -> {
+            int before = auditDays.size();
+            auditDays.removeIf(d -> d.isBefore(day));
+            return before - auditDays.size();
+        };
+        // The real guard around a fake sender: mailFails makes the send throw, as a refused ACS call does.
+        Mailer mailer = new GuardedMailer((subject, text) -> {
+            if (mailFails) throw new IllegalStateException("ACS refused the mail for owner@example.com");
+            mails.add(subject);
+        }, auditLog);
         BotCheck bot = (token, ip) -> botOk;
         EngineStore engineStore = new EngineStore() {
             @Override public EngineRecord load() {
@@ -134,7 +226,8 @@ public final class World {
                 c.state = engineRow.state; c.since = engineRow.since; c.paused = engineRow.paused;
                 c.pausedReason = engineRow.pausedReason; c.lastStopAt = engineRow.lastStopAt;
                 c.activeSessions = engineRow.activeSessions; c.externalSince = engineRow.externalSince;
-                c.lastSnapshotAt = engineRow.lastSnapshotAt;
+                c.lastSnapshotAt = engineRow.lastSnapshotAt; c.lastRetentionAt = engineRow.lastRetentionAt;
+                c.lastBudgetCheckAt = engineRow.lastBudgetCheckAt;
                 return c;
             }
             @Override public void save(EngineRecord record) { engineRow = record; }
@@ -142,6 +235,7 @@ public final class World {
         ContactStore contactStore = new ContactStore() {
             @Override public void save(Contact contact) { contactRows.add(contact); }
             @Override public List<Contact> list() { return List.copyOf(contactRows); }
+            @Override public void delete(String id) { contactRows.removeIf(c -> c.id().equals(id)); }
         };
         SnapshotStore snapshotStore = new SnapshotStore() {
             @Override public Optional<String> read() { return Optional.ofNullable(blob.get("snapshot")); }
@@ -159,11 +253,18 @@ public final class World {
                 idSupplier);
         ProxyService proxy = new ProxyService(upstream, vault, sessions, clock, () -> nanos);
         ContactService contacts = new ContactService(contactStore, mailer, bot, hasher, auditLog, clock, idSupplier);
-        AdminService admin = new AdminService(users, engine, () -> cost, auditLog, settings, clock);
+        UserErasure erasure = new UserErasure(users, sessions, contactStore);
+        AdminService admin = new AdminService(users, engine, () -> cost, auditLog, settings, clock, erasure, hasher);
+        retention = new RetentionService(users, sessions, erasure, auditStore, auditLog, engineStore, hasher, settings,
+                clock);
         snapshot = new SnapshotService(upstream, vault, snapshotStore, engineStore, clock);
         handlers = new Handlers(verifier, userService, engine, proxy, contacts, admin, snapshot, vault, hasher,
                 auditLog, settings, allowDevOrigin, () -> nanos, new RateGuard(5, Duration.ofMinutes(10), clock),
-                new RateGuard(3, Duration.ofMinutes(10), clock), edgeKeyRequired);
+                new RateGuard(3, Duration.ofMinutes(10), clock), edgeKeyRequired, retention,
+                new StatusService(monitor, cluster, cluster, upstream, () -> {
+                    if (keysFetchedAt == null) throw new IllegalStateException("no keys");
+                    return keysFetchedAt;
+                }, IDS, clock, STATUS_POOL));
     }
 
     // ------------------------------------------------------------ request helpers

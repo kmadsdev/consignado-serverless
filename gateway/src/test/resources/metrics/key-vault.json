@@ -1,0 +1,138 @@
+{
+ "cost": 36,
+ "interval": "PT1M",
+ "namespace": "Microsoft.KeyVault/vaults",
+ "resourceregion": "belgiumcentral",
+ "timespan": "2026-11-17T20:44:27Z/2026-11-17T20:49:27Z",
+ "value": [
+  {
+   "displayDescription": "Number of total service api hits",
+   "errorCode": "Success",
+   "id": "<id removed>",
+   "name": {
+    "localizedValue": "Total Service Api Hits",
+    "value": "ServiceApiHit"
+   },
+   "timeseries": [
+    {
+     "data": [
+      {
+       "average": 0,
+       "maximum": 0,
+       "timeStamp": "2026-11-17T20:44:00Z",
+       "total": 0
+      },
+      {
+       "average": 0,
+       "maximum": 0,
+       "timeStamp": "2026-11-17T20:45:00Z",
+       "total": 0
+      },
+      {
+       "average": 1,
+       "maximum": 1,
+       "timeStamp": "2026-11-17T20:46:00Z",
+       "total": 9
+      },
+      {
+       "average": 0,
+       "maximum": 0,
+       "timeStamp": "2026-11-17T20:47:00Z",
+       "total": 0
+      },
+      {
+       "average": 1,
+       "maximum": 1,
+       "timeStamp": "2026-11-17T20:48:00Z",
+       "total": 1
+      }
+     ],
+     "metadatavalues": []
+    }
+   ],
+   "type": "Microsoft.Insights/metrics",
+   "unit": "Count"
+  },
+  {
+   "displayDescription": "Overall latency of service api requests",
+   "errorCode": "Success",
+   "id": "<id removed>",
+   "name": {
+    "localizedValue": "Overall Service Api Latency",
+    "value": "ServiceApiLatency"
+   },
+   "timeseries": [
+    {
+     "data": [
+      {
+       "timeStamp": "2026-11-17T20:44:00Z"
+      },
+      {
+       "timeStamp": "2026-11-17T20:45:00Z"
+      },
+      {
+       "average": 59.77777777777778,
+       "maximum": 226,
+       "timeStamp": "2026-11-17T20:46:00Z",
+       "total": 538
+      },
+      {
+       "timeStamp": "2026-11-17T20:47:00Z"
+      },
+      {
+       "average": 58,
+       "maximum": 58,
+       "timeStamp": "2026-11-17T20:48:00Z",
+       "total": 58
+      }
+     ],
+     "metadatavalues": []
+    }
+   ],
+   "type": "Microsoft.Insights/metrics",
+   "unit": "MilliSeconds"
+  },
+  {
+   "displayDescription": "Vault requests availability",
+   "errorCode": "Success",
+   "id": "<id removed>",
+   "name": {
+    "localizedValue": "Overall Vault Availability",
+    "value": "Availability"
+   },
+   "timeseries": [
+    {
+     "data": [
+      {
+       "average": 100,
+       "timeStamp": "2026-11-17T20:44:00Z"
+      },
+      {
+       "average": 100,
+       "timeStamp": "2026-11-17T20:45:00Z"
+      },
+      {
+       "average": 100,
+       "maximum": 1,
+       "timeStamp": "2026-11-17T20:46:00Z",
+       "total": 9
+      },
+      {
+       "average": 100,
+       "timeStamp": "2026-11-17T20:47:00Z"
+      },
+      {
+       "average": 100,
+       "maximum": 1,
+       "timeStamp": "2026-11-17T20:48:00Z",
+       "total": 1
+      }
+     ],
+     "metadatavalues": []
+    }
+   ],
+   "type": "Microsoft.Insights/metrics",
+   "unit": "Percent"
+  }
+ ]
+}

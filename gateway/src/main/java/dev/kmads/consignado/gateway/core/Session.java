@@ -23,6 +23,8 @@ public final class Session {
     public List<LifecycleEvent> events = new ArrayList<>();
     /** True until the final cluster-stop event is recorded. The timer reads only open sessions. */
     public boolean open = true;
+    /** Proxied AKS calls of this window that the API host answered with 2xx or 3xx. */
+    public int requests;
     /** Storage version for optimistic concurrency. Null for a new row. */
     public String etag;
 

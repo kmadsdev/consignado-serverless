@@ -47,6 +47,17 @@ public final class TraceBuilder {
     public static Views.RequestTrace forProxy(HostKind host, Instant now, boolean guest, long identityMs,
                                               long keyVaultMs, boolean keyVaultCached, boolean keyVaultUsed,
                                               long upstreamMs, int status, long totalMs) {
+        return forProxy(host, now, guest, identityMs, keyVaultMs, keyVaultCached, keyVaultUsed, upstreamMs, status,
+                totalMs, null);
+    }
+
+    /**
+     * failure: a short detail when no upstream answer came ("timeout after 30 s", "function key not found in
+     * Key Vault"); null for the default text. An upstream answer of 500 or more is an error stage too.
+     */
+    public static Views.RequestTrace forProxy(HostKind host, Instant now, boolean guest, long identityMs,
+                                              long keyVaultMs, boolean keyVaultCached, boolean keyVaultUsed,
+                                              long upstreamMs, int status, long totalMs, String failure) {
         TraceBuilder t = new TraceBuilder(host, now);
         long up = Math.max(upstreamMs, 0);
         long own = Math.max(0, totalMs - identityMs - keyVaultMs - up);
@@ -60,10 +71,15 @@ public final class TraceBuilder {
             t.done(Stages.QUOTA, "access window is open", null);
             t.done(Stages.KEYVAULT, "not needed for this host", 0L);
             t.stage(Stages.LOAD_BALANCER, failed ? LifecycleEvent.ERROR : LifecycleEvent.DONE,
-                    failed ? "no answer from the internal load balancer" : "internal load balancer to pod", null);
+                    failed ? (failure != null ? failure : "no answer from the internal load balancer")
+                            : "internal load balancer to pod", null);
         } else {
-            t.done(Stages.KEYVAULT, !keyVaultUsed ? "not read" : keyVaultCached ? "cached" : "read from Key Vault",
-                    keyVaultMs);
+            if (failure != null && failure.startsWith("function key")) {
+                t.stage(Stages.KEYVAULT, LifecycleEvent.ERROR, failure, keyVaultMs);
+            } else {
+                t.done(Stages.KEYVAULT, !keyVaultUsed ? "not read" : keyVaultCached ? "cached" : "read from Key Vault",
+                        keyVaultMs);
+            }
             if (cold) {
                 t.done(Stages.FUNCTION_COLD_START,
                         "cold block: instance allocation and JVM start, measured together", up);
@@ -72,7 +88,10 @@ public final class TraceBuilder {
             if (!guest) t.done(Stages.DATABASE, "inside the upstream time", null);
         }
         if (failed) {
-            t.stage(Stages.RESPONSE, LifecycleEvent.ERROR, "no answer from the API host", up);
+            t.stage(Stages.RESPONSE, LifecycleEvent.ERROR,
+                    failure != null && !failure.startsWith("function key") ? failure : "no answer from the API host", up);
+        } else if (status >= 500) {
+            t.stage(Stages.RESPONSE, LifecycleEvent.ERROR, "upstream answered " + status, up);
         } else if (cold) {
             t.done(Stages.RESPONSE, "HTTP " + status + "; the time is inside the cold block", null);
         } else {
