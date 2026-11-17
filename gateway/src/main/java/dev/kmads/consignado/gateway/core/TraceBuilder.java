@@ -7,7 +7,15 @@ import java.util.List;
 
 /** Builds the RequestTrace of one proxied call from measured times. */
 public final class TraceBuilder {
-    public static final long COLD_MS = 3000;
+    /**
+     * Only the Functions host can be cold, and only a call of more than 8 s counts. A slow business call
+     * (4 to 5 s for a contract activation, measured live) is not a cold start. The AKS host is never cold.
+     */
+    public static final long COLD_MS = 8000;
+
+    public static boolean cold(HostKind host, long upstreamMs) {
+        return host == HostKind.FUNCTIONS && upstreamMs > COLD_MS;
+    }
 
     private final HostKind host;
     private final Instant now;
@@ -28,7 +36,7 @@ public final class TraceBuilder {
     }
 
     public Views.RequestTrace build(long totalMs, long upstreamMs) {
-        return new Views.RequestTrace(host.id(), upstreamMs > COLD_MS, totalMs, List.copyOf(events));
+        return new Views.RequestTrace(host.id(), cold(host, upstreamMs), totalMs, List.copyOf(events));
     }
 
     /**
@@ -42,7 +50,7 @@ public final class TraceBuilder {
         TraceBuilder t = new TraceBuilder(host, now);
         long up = Math.max(upstreamMs, 0);
         long own = Math.max(0, totalMs - identityMs - keyVaultMs - up);
-        boolean cold = upstreamMs > COLD_MS;
+        boolean cold = cold(host, upstreamMs);
         boolean failed = upstreamMs < 0 || status == 0;
         t.done(Stages.REQUEST, "browser sent the request", null);
         t.done(Stages.EDGE, "Cloudflare edge: WAF, rate limit", null);
@@ -65,7 +73,7 @@ public final class TraceBuilder {
         }
         if (failed) {
             t.stage(Stages.RESPONSE, LifecycleEvent.ERROR, "no answer from the API host", up);
-        } else if (cold && host == HostKind.FUNCTIONS) {
+        } else if (cold) {
             t.done(Stages.RESPONSE, "HTTP " + status + "; the time is inside the cold block", null);
         } else {
             t.done(Stages.RESPONSE, "HTTP " + status + " from the API host", up);
