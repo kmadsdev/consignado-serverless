@@ -307,4 +307,46 @@ class StatusServiceTest {
         w.upstream.readiness = 503;
         assertEquals("down", service(World.json(get("host=aks", "good-u1")), "load-balancer").get("state").asText());
     }
+
+    // ------------------------------------------------------------- build (contract addendum 2)
+
+    private static ClusterView.Pod pod(String name, String image, boolean ready, String created) {
+        ClusterView.Container c = new ClusterView.Container("api", "running", null, true, 0, image);
+        return new ClusterView.Pod(name, "aks-nodepool1-123-vmss000000", "Running", true, true, true, ready, ready,
+                List.of(c), created == null ? null : java.time.Instant.parse(created), ClusterView.PodTimes.NONE);
+    }
+
+    @Test
+    void podsCarryTheBuildOfTheRunningImageAndFunctionsDoNot() {
+        azureAnswers();
+        w.cluster.running();
+        String sha = "0dae5d2c4b1f9e8a7d6c5b4a39281706f5e4d3c2";
+        w.cluster.view = new ClusterView(true, List.of(new ClusterView.Node("aks-nodepool1-123-vmss000000", true)),
+                List.of(pod("consignado-api-old", "crconsignadokm01.azurecr.io/consignado-api:1111111", true,
+                                "2026-11-17T10:00:00Z"),
+                        pod("consignado-api-new", "crconsignadokm01.azurecr.io/consignado-api:" + sha, true,
+                                "2026-11-17T11:00:00Z")), 2);
+        w.upstream.readiness = 200;
+        JsonNode pods = service(World.json(get("host=aks", "good-u1")), "pods");
+        assertEquals(sha, pods.get("build").get("commit").asText(), "the newest Ready pod");
+        assertEquals("kmadsdev/consignado-api", pods.get("build").get("repository").asText());
+        assertFalse(service(World.json(get("host=aks", "good-u1")), "cluster").has("build"));
+
+        JsonNode fn = service(World.json(get("host=functions", null)), "functions");
+        assertFalse(fn.has("build"), "the Functions host data carries no commit");
+    }
+
+    @Test
+    void buildIsLeftOutWhenTheTagIsNotACommit() {
+        assertNull(StatusService.build(List.of(pod("p", "cr.io/consignado-api:latest", true, null)), "consignado-api"));
+        assertNull(StatusService.build(List.of(pod("p", "cr.io/consignado-api", true, null)), "consignado-api"));
+        assertNull(StatusService.build(List.of(pod("p", "cr.io/other:abcdef1", true, null)), "consignado-api"),
+                "only the API image counts");
+        assertNull(StatusService.build(List.of(pod("p", "cr.io/consignado-api:ABCDEF1", true, null)), "consignado-api"));
+        assertNull(StatusService.build(List.of(), "consignado-api"));
+        assertEquals("abcdef1", StatusService.build(List.of(pod("p", "cr.io/consignado-api:abcdef1", false, null)),
+                "consignado-api").commit(), "any live pod when none is Ready");
+        assertEquals("consignado-api", new ClusterView.Container("a", "running", null, true, 0,
+                "cr.io:5000/team/consignado-api:abc@sha256:00").imageName());
+    }
 }

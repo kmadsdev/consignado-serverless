@@ -414,6 +414,20 @@ public final class StatusService {
         List<Views.Metric> m = List.of(
                 new Views.Metric("replicas", replicasLabel, replicas, "count", "now"),
                 new Views.Metric("restarts", "Restarts", (double) restarts, "count", "now"));
-        return new Views.ServiceStatus("pods", name, kind, null, state, detail.toString(), m, List.of("kubernetes"));
+        return new Views.ServiceStatus("pods", name, kind, null, state, detail.toString(), m, List.of("kubernetes"),
+                build(live, name));
+    }
+
+    /**
+     * The build of the API that answers: the image tag (= git commit of kmadsdev/consignado-api) of the API
+     * container in the newest Ready pod (any live pod when none is Ready). null when the tag is not a commit.
+     */
+    static Views.Build build(List<ClusterView.Pod> live, String image) {
+        java.util.Comparator<ClusterView.Pod> newest = java.util.Comparator.comparing(ClusterView.Pod::createdAt,
+                java.util.Comparator.nullsFirst(java.util.Comparator.<Instant>naturalOrder()));
+        java.util.Optional<ClusterView.Pod> pod = live.stream().filter(ClusterView.Pod::ready).max(newest)
+                .or(() -> live.stream().max(newest));
+        return pod.flatMap(x -> x.containers().stream().filter(c -> image.equals(c.imageName())).findFirst())
+                .map(c -> Views.Build.ofApiImageTag(c.imageTag())).orElse(null);
     }
 }

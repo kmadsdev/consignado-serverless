@@ -1,5 +1,6 @@
 package dev.kmads.consignado.gateway.adapters;
 
+import dev.kmads.consignado.gateway.core.ApiTiming;
 import dev.kmads.consignado.gateway.core.HostKind;
 import dev.kmads.consignado.gateway.core.Logs;
 import java.util.logging.Level;
@@ -39,7 +40,8 @@ public final class HttpUpstream implements Upstream {
             builder.method(request.method(), body);
             HttpResponse<byte[]> response = client.send(builder.build(), HttpResponse.BodyHandlers.ofByteArray());
             return new Response(response.statusCode(),
-                    response.headers().firstValue("content-type").orElse(null), response.body());
+                    response.headers().firstValue("content-type").orElse(null), response.body(),
+                    response.headers().firstValue(ApiTiming.HEADER).orElse(null));
         } catch (HttpTimeoutException e) {
             LOG.log(Level.WARNING, Logs.fmt("upstream {0} {1} timeout: {2}", request.host().id(), request.path(), Logs.of(e)));
             throw new UpstreamException(true);
