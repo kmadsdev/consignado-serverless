@@ -17,9 +17,16 @@ public final class AdminService {
     private final AuditLog audit;
     private final Settings settings;
     private final Clock clock;
+    private final UserErasure erasure;
+    private final Hasher hasher;
+
+    /** The answer of the action "delete". The Entra ID guest account stays: the gateway has no directory rights. */
+    public record Deleted(boolean deleted, String entraAccount) {}
 
     public AdminService(UserStore users, EngineService engine, CostReader cost, AuditLog audit, Settings settings,
-                        Clock clock) {
+                        Clock clock, UserErasure erasure, Hasher hasher) {
+        this.erasure = erasure;
+        this.hasher = hasher;
         this.users = users;
         this.engine = engine;
         this.cost = cost;
@@ -34,11 +41,16 @@ public final class AdminService {
                 .map(u -> Views.adminUser(u, settings)).toList();
     }
 
-    /** body: {action: approve | hold | block | grant, windows?} */
-    public Views.AdminUser act(String adminId, String userId, JsonNode body, String ipHash) {
+    /**
+     * body: {action: approve | hold | block | grant | delete, windows?}. Returns Views.AdminUser, or Deleted
+     * for the action delete.
+     */
+    public Object act(String adminId, String userId, JsonNode body, String ipHash) {
         if (body == null || !body.isObject()) throw ApiException.badRequest("A JSON body is required");
         String action = body.path("action").asText("");
-        User user = users.find(Validate.userId(userId)).orElseThrow(ApiException::notFound);
+        String id = Validate.userId(userId);
+        if (action.equals("delete")) return delete(adminId, id, ipHash);
+        User user = users.find(id).orElseThrow(ApiException::notFound);
         switch (action) {
             case "approve" -> {
                 user.status = User.ACTIVE;
@@ -55,11 +67,27 @@ public final class AdminService {
                 if (windows < 1 || windows > 20) throw ApiException.badRequest("Field windows must be 1 to 20");
                 user.windowsMax = Math.min(1000, user.windowsMax + windows);
             }
-            default -> throw ApiException.badRequest("Field action must be approve, hold, block or grant");
+            default -> throw ApiException.badRequest("Field action must be approve, hold, block, grant or delete");
         }
         users.save(user);
         audit.record(adminId, "admin.user." + action, user.id, ipHash);
         return Views.adminUser(user, settings);
+    }
+
+    /**
+     * Deletion on request (LGPD article 18): the users row, the sessions rows and the contacts rows of the user.
+     * The audit row has a hash of the user id, never the id or the email. An open window of the user ends with
+     * its row; the timer then stops the cluster when nothing else is active. The admin cannot delete himself.
+     */
+    private Deleted delete(String adminId, String userId, String ipHash) {
+        if (userId.equals(adminId) || userId.equals(settings.adminOid())) {
+            throw ApiException.conflict("self-delete", "The owner account cannot be deleted here");
+        }
+        User user = users.find(userId).orElseThrow(ApiException::notFound);
+        String target = hasher.hash(user.id);
+        erasure.erase(user);
+        audit.record(adminId, "admin.user.delete", target, ipHash);
+        return new Deleted(true, "delete it in the Entra admin center");
     }
 
     public Views.AdminState state() {

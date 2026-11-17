@@ -16,4 +16,6 @@ public interface SessionStore {
     /** Sessions with open=true (starting, ready, or ended but the cluster did not stop yet). */
     List<Session> listOpen();
     List<Session> list();
+    /** Removes the row. No error when it does not exist. */
+    void delete(String id);
 }

@@ -18,6 +18,7 @@ import dev.kmads.consignado.gateway.core.Session;
 import dev.kmads.consignado.gateway.core.Times;
 import dev.kmads.consignado.gateway.core.User;
 import dev.kmads.consignado.gateway.ports.AuditLog;
+import dev.kmads.consignado.gateway.ports.AuditStore;
 import dev.kmads.consignado.gateway.ports.ContactStore;
 import dev.kmads.consignado.gateway.ports.EngineStore;
 import dev.kmads.consignado.gateway.ports.SessionStore;
@@ -92,6 +93,16 @@ public final class TableStores {
         return Times.parse(str(e, key));
     }
 
+    /** Deletes one row; a row that does not exist is not an error. */
+    private static void remove(TableClient table, String pk, String rk) {
+        try {
+            table.deleteEntity(pk, rk);
+        } catch (TableServiceException e) {
+            if (e.getResponse() != null && e.getResponse().getStatusCode() == 404) return;
+            throw e;
+        }
+    }
+
     private static void put(TableEntity e, String key, Object value) {
         if (value != null) e.addProperty(key, value);
     }
@@ -130,6 +141,11 @@ public final class TableStores {
             @Override
             public List<User> list() {
                 return query(table, "PartitionKey eq 'u'").stream().map(TableStores::toUser).toList();
+            }
+
+            @Override
+            public void delete(String id) {
+                remove(table, "u", id);
             }
         };
     }
@@ -207,6 +223,11 @@ public final class TableStores {
             public List<Session> list() {
                 return query(table, "PartitionKey eq 's'").stream().map(TableStores::toSession).toList();
             }
+
+            @Override
+            public void delete(String id) {
+                remove(table, "s", id);
+            }
         };
     }
 
@@ -248,6 +269,7 @@ public final class TableStores {
                     r.activeSessions = num(e, "activeSessions");
                     r.externalSince = time(e, "externalSince");
                     r.lastSnapshotAt = time(e, "lastSnapshotAt");
+                    r.lastRetentionAt = time(e, "lastRetentionAt");
                 });
                 return r;
             }
@@ -263,6 +285,7 @@ public final class TableStores {
                 put(e, "activeSessions", r.activeSessions);
                 put(e, "externalSince", Times.iso(r.externalSince));
                 put(e, "lastSnapshotAt", Times.iso(r.lastSnapshotAt));
+                put(e, "lastRetentionAt", Times.iso(r.lastRetentionAt));
                 table.upsertEntityWithResponse(e, TableEntityUpdateMode.REPLACE, null, null);
             }
         };
@@ -281,6 +304,7 @@ public final class TableStores {
                 put(e, "email", c.email());
                 put(e, "message", c.message());
                 put(e, "createdAt", c.createdAt());
+                put(e, "userId", c.userId());
                 table.upsertEntityWithResponse(e, TableEntityUpdateMode.REPLACE, null, null);
             }
 
@@ -288,13 +312,41 @@ public final class TableStores {
             public List<Contact> list() {
                 return query(table, "PartitionKey eq 'c'").stream()
                         .map(e -> new Contact(e.getRowKey(), strOr(e, "kind", "contact"), strOr(e, "name", ""),
-                                strOr(e, "email", ""), strOr(e, "message", ""), strOr(e, "createdAt", "")))
+                                strOr(e, "email", ""), strOr(e, "message", ""), strOr(e, "createdAt", ""),
+                                str(e, "userId")))
                         .sorted((a, b) -> b.createdAt().compareTo(a.createdAt())).toList();
+            }
+
+            @Override
+            public void delete(String id) {
+                remove(table, "c", id);
             }
         };
     }
 
     // ------------------------------------------------------------------ audit
+
+    /**
+     * Retention of the audit table: the partition key is the day (yyyy-mm-dd), so the rows older than
+     * a day are one range query. Only the keys are read.
+     */
+    public AuditStore auditRetention() {
+        TableClient table = table("audit");
+        return day -> {
+            int deleted = 0;
+            try {
+                String filter = "PartitionKey lt '" + day + "'";
+                for (TableEntity e : table.listEntities(new ListEntitiesOptions().setFilter(filter)
+                        .setSelect(List.of("PartitionKey", "RowKey")), null, null)) {
+                    remove(table, e.getPartitionKey(), e.getRowKey());
+                    deleted++;
+                }
+            } catch (RuntimeException ex) {
+                LOG.log(Level.WARNING, Logs.fmt("audit retention failed after {0} rows: {1}", deleted, Logs.of(ex)));
+            }
+            return deleted;
+        };
+    }
 
     public AuditLog audit() {
         TableClient table = table("audit");
