@@ -180,9 +180,13 @@ public final class Handlers {
         long start = nanos.getAsLong();
         return run(req, () -> {
             Caller caller = authenticate(req);
+            if (caller.guest() && engine.pausedForBudget()) {
+                // Anonymous load must not keep spending after the budget is reached.
+                throw new ApiException(503, "paused", "The demo is paused because its monthly budget is used");
+            }
             User user = caller.guest() ? null : users.me(caller.claims(), clientIp(req));
             ProxyService.Result r = proxy.forward(host, req.method(), req.pathParam(), req.rawQuery(), req.headers(),
-                    req.body(), user, caller.identityMs(), start);
+                    req.body(), user, !caller.guest() && users.isAdmin(caller.claims()), caller.identityMs(), start);
             GatewayResponse response = GatewayResponse.raw(r.status(), r.contentType(), r.body());
             response.headers().put("x-consignado-host", r.host().id());
             response.headers().put("x-consignado-trace", TraceBuilder.encode(r.trace()));
@@ -225,7 +229,13 @@ public final class Handlers {
      */
     public GatewayResponse budgetHook(GatewayRequest req) {
         return run(req, false, () -> {
-            if (belowBudget(req.body())) {
+            Boolean below = belowBudget(req.body());
+            if (below == null) {
+                // A body that cannot be read does not pause any more (L3). The timer's own cost check stays.
+                audit.record("budget-alert", "budget.alert.unreadable", "engine", null);
+                throw ApiException.badRequest("The body is not a budget alert");
+            }
+            if (below) {
                 audit.record("budget-alert", "budget.alert.early", "engine", null);
                 return GatewayResponse.json(200, Map.of("status", "noted"));
             }
@@ -242,6 +252,11 @@ public final class Handlers {
             LOG.log(Level.WARNING, Logs.fmt("reaper: engine tick failed: {0}", Logs.of(e)));
         }
         try {
+            admin.checkBudgetIfDue();
+        } catch (RuntimeException e) {
+            LOG.log(Level.WARNING, Logs.fmt("reaper: budget check failed: {0}", Logs.of(e)));
+        }
+        try {
             snapshot.refreshIfDue();
         } catch (RuntimeException e) {
             LOG.log(Level.WARNING, Logs.fmt("reaper: snapshot refresh failed: {0}", Logs.of(e)));
@@ -255,17 +270,19 @@ public final class Handlers {
 
     // ---------------------------------------------------------------- helpers
 
-    private static boolean belowBudget(byte[] body) {
+    /** True: an early alert. False: at or above the budget. Null: not a budget alert body. */
+    private static Boolean belowBudget(byte[] body) {
         try {
             JsonNode data = Json.MAPPER.readTree(body).path("data");
             JsonNode spent = data.path("SpendingAmount");
             JsonNode budget = data.path("Budget");
-            if (spent.isMissingNode() || budget.isMissingNode()) return false;
+            if (spent.isMissingNode() || budget.isMissingNode()) return null;
             double s = Double.parseDouble(spent.asText());
             double b = Double.parseDouble(budget.asText());
+            if (Double.isNaN(s) || Double.isNaN(b)) return null;
             return b > 0 && s < b;
         } catch (Exception e) {
-            return false;
+            return null;
         }
     }
 
@@ -277,24 +294,34 @@ public final class Handlers {
      * The edge key proves that the request came through the Cloudflare Worker. It is checked before
      * anything else, and a refusal says nothing about the reason.
      */
-    private boolean edgeKeyOk(GatewayRequest req) {
-        String sent = req.header("x-edge-key");
-        if (sent == null || sent.isEmpty() || sent.length() > 512) return false;
+    private enum Edge { OK, REFUSED, UNAVAILABLE }
+
+    /** The secret that cannot be read (Key Vault error, or no value) gives 503: never a pass. */
+    private Edge edgeKey(GatewayRequest req) {
         String expected;
         try {
             expected = secrets.read(EDGE_KEY).value();
         } catch (RuntimeException e) {
-            return false;
+            LOG.log(Level.WARNING, Logs.fmt("edge key could not be read: {0}", e.getClass().getSimpleName()));
+            return Edge.UNAVAILABLE;
         }
-        if (expected == null || expected.isEmpty()) return false;
+        if (expected == null || expected.isEmpty()) {
+            LOG.log(Level.WARNING, "edge key: the secret edge-key has no value");
+            return Edge.UNAVAILABLE;
+        }
+        String sent = req.header("x-edge-key");
+        if (sent == null || sent.isEmpty() || sent.length() > 512) return Edge.REFUSED;
         return java.security.MessageDigest.isEqual(sent.getBytes(StandardCharsets.UTF_8),
-                expected.getBytes(StandardCharsets.UTF_8));
+                expected.getBytes(StandardCharsets.UTF_8)) ? Edge.OK : Edge.REFUSED;
     }
 
     private GatewayResponse run(GatewayRequest req, boolean edgeRoute, Supplier<GatewayResponse> action) {
         GatewayResponse response;
-        if (edgeKeyRequired && edgeRoute && !edgeKeyOk(req)) {
-            response = GatewayResponse.json(403, new Views.ErrorBody("forbidden", "Not allowed"));
+        Edge edge = edgeKeyRequired && edgeRoute ? edgeKey(req) : Edge.OK;
+        if (edge != Edge.OK) {
+            response = edge == Edge.UNAVAILABLE
+                    ? GatewayResponse.json(503, new Views.ErrorBody("unavailable", "Service unavailable"))
+                    : GatewayResponse.json(403, new Views.ErrorBody("forbidden", "Not allowed"));
             response.headers().put("Cache-Control", "no-store");
             response.headers().put("X-Content-Type-Options", "nosniff");
             return response;

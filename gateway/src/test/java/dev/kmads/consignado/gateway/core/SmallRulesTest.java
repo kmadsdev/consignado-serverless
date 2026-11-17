@@ -178,10 +178,24 @@ class SmallRulesTest {
         assertEquals(Duration.ofMinutes(15), c.settings().window());
         assertEquals(Duration.ofMinutes(20), c.settings().idleGrace());
         assertFalse(c.allowDevOrigin());
-        assertFalse(c.edgeCloudflare());
-        Map<String, String> cf = env();
-        cf.put("EDGE", "cloudflare");
-        assertTrue(Config.load(cf::get).edgeCloudflare());
+        // Fail closed (L2): no EDGE, "cloudflare" or a typo keep the edge key on; only EDGE=local turns it off.
+        assertTrue(c.edgeKeyRequired());
+        for (String v : new String[] {"cloudflare", "Cloudflare", "none", "", "lokal"}) {
+            Map<String, String> cf = env();
+            cf.put("EDGE", v);
+            assertTrue(Config.load(cf::get).edgeKeyRequired(), v);
+        }
+        Map<String, String> local = env();
+        local.put("EDGE", "local");
+        assertFalse(Config.load(local::get).edgeKeyRequired());
+        assertEquals(12, c.settings().dailyWindowsMax());
+        Map<String, String> daily = env();
+        daily.put("DAILY_WINDOWS_MAX", "5");
+        assertEquals(5, Config.load(daily::get).settings().dailyWindowsMax());
+        daily.put("DAILY_WINDOWS_MAX", "0");
+        assertThrows(IllegalStateException.class, () -> Config.load(daily::get));
+        assertNull(c.spaClientId());
+        assertEquals(java.util.List.of("consignado.kmads.dev", "cluster.consignado.kmads.dev"), c.turnstileHostnames());
         assertNull(c.acsEndpoint());
         assertFalse(c.toString().contains("owner@example.com"));
 
