@@ -14,6 +14,6 @@ public record Settings(
 
     public static Settings defaults(String adminOid) {
         return new Settings(adminOid, Duration.ofMinutes(15), 3, Duration.ofMinutes(15), 60.0,
-                Duration.ofMinutes(15), Duration.ofMinutes(10));
+                Duration.ofMinutes(15), Duration.ofMinutes(20));
     }
 }

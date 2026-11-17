@@ -51,7 +51,7 @@ public record Config(
 
     public Settings settings() {
         return new Settings(adminOid, Duration.ofMinutes(windowMinutes), windowsMax,
-                Duration.ofMinutes(cooldownMinutes), budgetLimitUsd, Duration.ofMinutes(15), Duration.ofMinutes(10));
+                Duration.ofMinutes(cooldownMinutes), budgetLimitUsd, Duration.ofMinutes(15), Duration.ofMinutes(20));
     }
 
     private static String optional(Function<String, String> env, String name) {
