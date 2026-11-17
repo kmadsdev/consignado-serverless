@@ -63,6 +63,8 @@ class ParsersTest {
             assertEquals(java.util.Set.of("Accept", "Authorization"), r.headers().map().keySet(),
                     "Content-Length is set by the HTTP client, never by this code");
             assertEquals(0L, r.bodyPublisher().orElseThrow().contentLength(), "an empty body, but a body publisher");
+            assertEquals(java.net.http.HttpClient.Version.HTTP_1_1, r.version().orElseThrow(),
+                    "HTTP/1.1: the client sends Content-Length: 0 (ARM answers 411 without it)");
         }
         assertThrows(IllegalArgumentException.class, () -> ArmClusterControl.actionRequest(id, "delete", "t"));
         java.net.http.HttpRequest get = ArmClusterControl.getRequest(id, "token-value");
