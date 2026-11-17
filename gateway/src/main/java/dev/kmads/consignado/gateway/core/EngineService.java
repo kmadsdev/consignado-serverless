@@ -24,6 +24,7 @@ public final class EngineService {
     public static final String READINESS_PATH = "actuator/health/readiness";
     private static final Duration OBSERVE_EVERY = Duration.ofSeconds(3);
     private static final Duration START_RETRY_AFTER = Duration.ofMinutes(2);
+    public static final Duration BUDGET_CHECK_EVERY = Duration.ofMinutes(30);
     private static final String CLUSTER = "aks-consignado";
     private static final java.util.logging.Logger LOG = java.util.logging.Logger.getLogger("consignado.gateway");
 
@@ -96,6 +97,16 @@ public final class EngineService {
         if (!admin && user.windowsUsed >= user.windowsMax) {
             throw ApiException.conflict("no-windows", "No access windows are left for this account");
         }
+        if (!admin) {
+            // Cost guard over all accounts: many accounts of one person cannot keep the cluster running.
+            Instant dayAgo = now.minus(Duration.ofHours(24));
+            long recent = sessions.list().stream()
+                    .filter(x -> x.requestedAt != null && x.requestedAt.isAfter(dayAgo)).count();
+            if (recent >= settings.dailyWindowsMax()) {
+                throw ApiException.conflict("daily-limit", "The demo reached its daily limit of access windows. "
+                        + "Try again tomorrow.");
+            }
+        }
         long left = EngineRecord.COOLDOWN.equals(rec.state) ? cooldownLeft(rec, now) : 0;
         if (left > 0) throw cooldown(left);
         if (EngineRecord.STOPPING.equals(rec.state)) throw cooldown(settings.cooldown().toSeconds());
@@ -132,7 +143,8 @@ public final class EngineService {
         sessions.save(s);
         engine.save(rec);
         user.activeSessionId = s.id;
-        users.save(user);
+        // Only this field changes, on the newest row: an admin block made meanwhile stays.
+        UserRows.update(users, user.id, u -> u.activeSessionId = s.id);
         audit.record(user.id, "session.create", s.id, ipHash);
         return new WindowResult(s, true);
     }
@@ -203,10 +215,7 @@ public final class EngineService {
             if (!save(s)) continue; // the timer or a poll changed the row: read it again
             release(s);
             if (countNow) {
-                users.find(s.userId).ifPresent(u -> {
-                    u.windowsUsed = u.windowsUsed + 1;
-                    users.save(u);
-                });
+                UserRows.updateQuietly(users, s.userId, u -> u.windowsUsed = u.windowsUsed + 1, "window count");
             }
             audit.record(callerId, "session.end", s.id, ipHash);
             return s;
@@ -332,6 +341,35 @@ public final class EngineService {
         }
         // A forced stop does not wait for the idle grace.
         settle(new Signals(), now, who, true);
+    }
+
+    /** True while new spending is paused by the budget (webhook or the timer's own cost check). */
+    public boolean pausedForBudget() {
+        EngineRecord rec = engine.load();
+        return rec.paused && "budget".equals(rec.pausedReason);
+    }
+
+    /**
+     * The timer's own budget guard, at most every 30 minutes (lastBudgetCheckAt in the engine row): it does not
+     * depend on the webhook. Spend at or above the limit takes the same path as the webhook. Unknown cost: no change.
+     */
+    public boolean checkBudgetIfDue(dev.kmads.consignado.gateway.ports.CostReader cost) {
+        Instant now = clock.instant();
+        EngineRecord rec = engine.load();
+        if (rec.lastBudgetCheckAt != null
+                && Duration.between(rec.lastBudgetCheckAt, now).compareTo(BUDGET_CHECK_EVERY) < 0) {
+            return false;
+        }
+        rec.lastBudgetCheckAt = now;
+        engine.save(rec);
+        if (rec.paused && "budget".equals(rec.pausedReason)) return false;
+        double limit = settings.budgetLimitUsd();
+        boolean over = limit > 0 && cost.monthToDate().map(c -> c.usd() >= limit).orElse(false);
+        if (!over) return false;
+        LOG.warning(Logs.fmt("budget guard: month-to-date cost is at or above {0} USD; pausing", limit));
+        audit.record("budget-guard", "budget.limit.reached", "engine", null);
+        budgetExceeded();
+        return true;
     }
 
     /** The budget alert: pause with reason budget and stop the cluster now. */
@@ -475,10 +513,7 @@ public final class EngineService {
                 "window is open for " + settings.window().toMinutes() + " minutes", null);
         if (!save(s)) return false;
         // The window is counted only now: a start that fails costs the user nothing.
-        users.find(s.userId).ifPresent(u -> {
-            u.windowsUsed = u.windowsUsed + 1;
-            users.save(u);
-        });
+        UserRows.updateQuietly(users, s.userId, u -> u.windowsUsed = u.windowsUsed + 1, "window count");
         return true;
     }
 
@@ -509,12 +544,11 @@ public final class EngineService {
     }
 
     private void release(Session s) {
-        users.find(s.userId).ifPresent(u -> {
-            if (s.id.equals(u.activeSessionId)) {
-                u.activeSessionId = null;
-                users.save(u);
-            }
-        });
+        if (users.find(s.userId).map(u -> s.id.equals(u.activeSessionId)).orElse(false)) {
+            UserRows.updateQuietly(users, s.userId, u -> {
+                if (s.id.equals(u.activeSessionId)) u.activeSessionId = null;
+            }, "window release");
+        }
     }
 
     /** False when another writer changed the row first: this writer drops its change. */

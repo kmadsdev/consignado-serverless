@@ -135,7 +135,24 @@ public final class TableStores {
                 put(e, "consentAt", Times.iso(u.consentAt));
                 put(e, "approvedByAdmin", u.approvedByAdmin);
                 put(e, "activeSessionId", u.activeSessionId);
-                table.upsertEntityWithResponse(e, TableEntityUpdateMode.REPLACE, null, null);
+                put(e, "mailboxHash", u.mailboxHash);
+                try {
+                    Response<Void> response;
+                    if (u.etag == null) {
+                        response = table.upsertEntityWithResponse(e, TableEntityUpdateMode.REPLACE, null, null);
+                    } else {
+                        // If-Match: a row that changed after the read is not overwritten (412 -> conflict).
+                        e.addProperty(ETAG, u.etag);
+                        response = table.updateEntityWithResponse(e, TableEntityUpdateMode.REPLACE, true, null, null);
+                    }
+                    String etag = response.getHeaders().getValue("ETag");
+                    if (etag != null) u.etag = etag;
+                } catch (TableServiceException ex) {
+                    if (ex.getResponse() != null && ex.getResponse().getStatusCode() == 412) {
+                        throw new UserStore.ConflictException();
+                    }
+                    throw ex;
+                }
             }
 
             @Override
@@ -171,6 +188,8 @@ public final class TableStores {
         u.consentAt = time(e, "consentAt");
         u.approvedByAdmin = bool(e, "approvedByAdmin");
         u.activeSessionId = str(e, "activeSessionId");
+        u.mailboxHash = str(e, "mailboxHash");
+        u.etag = e.getETag();
         return u;
     }
 
@@ -270,6 +289,7 @@ public final class TableStores {
                     r.externalSince = time(e, "externalSince");
                     r.lastSnapshotAt = time(e, "lastSnapshotAt");
                     r.lastRetentionAt = time(e, "lastRetentionAt");
+                    r.lastBudgetCheckAt = time(e, "lastBudgetCheckAt");
                 });
                 return r;
             }
@@ -286,6 +306,7 @@ public final class TableStores {
                 put(e, "externalSince", Times.iso(r.externalSince));
                 put(e, "lastSnapshotAt", Times.iso(r.lastSnapshotAt));
                 put(e, "lastRetentionAt", Times.iso(r.lastRetentionAt));
+                put(e, "lastBudgetCheckAt", Times.iso(r.lastBudgetCheckAt));
                 table.upsertEntityWithResponse(e, TableEntityUpdateMode.REPLACE, null, null);
             }
         };

@@ -94,13 +94,14 @@ class RetentionServiceTest {
     @Test
     void keepsAnInactiveAccountWithAnActiveWindow() {
         User u = user("busy", monthsAgo(20), monthsAgo(13));
+        u.activeSessionId = "sbusy";
+        w.users.save(u);
         Session s = new Session();
         s.id = "sbusy";
         s.userId = "busy";
         s.state = Session.READY;
         s.requestedAt = w.clock.now;
         w.sessions.save(s);
-        u.activeSessionId = "sbusy";
         assertEquals(0, w.retention.runIfDue().accounts());
         assertTrue(w.users.rows.containsKey("busy"));
     }

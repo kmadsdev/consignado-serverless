@@ -50,7 +50,13 @@ public final class AdminService {
         String action = body.path("action").asText("");
         String id = Validate.userId(userId);
         if (action.equals("delete")) return delete(adminId, id, ipHash);
-        User user = users.find(id).orElseThrow(ApiException::notFound);
+        User user = UserRows.update(users, id, u -> apply(u, action, body)).orElseThrow(ApiException::notFound);
+        audit.record(adminId, "admin.user." + action, user.id, ipHash);
+        return Views.adminUser(user, settings);
+    }
+
+    /** The change of one admin action. Applied to the newest row (again after a conflict). */
+    private static void apply(User user, String action, JsonNode body) {
         switch (action) {
             case "approve" -> {
                 user.status = User.ACTIVE;
@@ -69,9 +75,6 @@ public final class AdminService {
             }
             default -> throw ApiException.badRequest("Field action must be approve, hold, block, grant or delete");
         }
-        users.save(user);
-        audit.record(adminId, "admin.user." + action, user.id, ipHash);
-        return Views.adminUser(user, settings);
     }
 
     /**
@@ -88,6 +91,11 @@ public final class AdminService {
         erasure.erase(user);
         audit.record(adminId, "admin.user.delete", target, ipHash);
         return new Deleted(true, "delete it in the Entra admin center");
+    }
+
+    /** The timer's budget guard (every 30 minutes). */
+    public boolean checkBudgetIfDue() {
+        return engine.checkBudgetIfDue(cost);
     }
 
     public Views.AdminState state() {

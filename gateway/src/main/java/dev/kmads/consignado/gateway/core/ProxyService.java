@@ -48,6 +48,12 @@ public final class ProxyService {
      */
     public Result forward(HostKind host, String method, String rawPath, String rawQuery, Map<String, String> headers,
                           byte[] body, User user, long identityMs, long startNanos) {
+        return forward(host, method, rawPath, rawQuery, headers, body, user, false, identityMs, startNanos);
+    }
+
+    /** admin is true for the owner: only the owner may write agreements (their names are public in the snapshot). */
+    public Result forward(HostKind host, String method, String rawPath, String rawQuery, Map<String, String> headers,
+                          byte[] body, User user, boolean admin, long identityMs, long startNanos) {
         String m = method == null ? "" : method.toUpperCase(Locale.ROOT);
         if (!METHODS.contains(m)) throw new ApiException(405, "method-not-allowed", "Method not allowed");
         String path = cleanPath(rawPath);
@@ -65,6 +71,9 @@ public final class ProxyService {
             }
         } else if (User.BLOCKED.equals(user.status)) {
             throw new ApiException(403, "blocked", "This account is blocked");
+        } else if (!admin && !m.equals("GET") && isAgreementPath(path)) {
+            // Agreement names are free text and the public snapshot shows them: only the owner writes them.
+            throw ApiException.forbidden();
         }
         Instant now = clock.instant();
         if (host == HostKind.AKS) requireOpenWindow(user, now);
@@ -145,4 +154,10 @@ public final class ProxyService {
     private long ms(long fromNanos) {
         return Math.max(0, (nanos.getAsLong() - fromNanos) / 1_000_000);
     }
+
+    static boolean isAgreementPath(String path) {
+        return path.equals(AGREEMENTS) || path.startsWith(AGREEMENTS + "/");
+    }
+
+    private static final String AGREEMENTS = "api/v1/agreements";
 }

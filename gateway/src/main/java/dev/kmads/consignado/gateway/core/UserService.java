@@ -14,6 +14,8 @@ public final class UserService {
     public static final String FLAG_SAME_DEVICE = "same-device";
     public static final String FLAG_SAME_IP = "same-ip";
     public static final String FLAG_DISPOSABLE = "disposable-email";
+    /** Same normalised mailbox as another account (me+1@x, m.e@gmail.com): held like the same device. */
+    public static final String FLAG_SAME_MAILBOX = "same-mailbox";
 
     private final UserStore users;
     private final Mailer mailer;
@@ -51,6 +53,7 @@ public final class UserService {
             user.createdAt = now;
             user.lastSeenAt = now;
             user.ipHash = hasher.hash(clientIp);
+            user.mailboxHash = mailboxHash(user.email);
             if (Validate.disposableEmail(user.email)) user.flags.add(FLAG_DISPOSABLE);
             users.save(user);
             audit.record(user.id, "user.create", user.id, user.ipHash);
@@ -67,8 +70,20 @@ public final class UserService {
             user.lastSeenAt = now;
             changed = true;
         }
-        if (changed) users.save(user);
+        if (changed) {
+            try {
+                users.save(user);
+            } catch (UserStore.ConflictException e) {
+                // Another writer changed the row (for example the admin): keep its version. lastSeenAt can wait.
+                user = users.find(claims.oid()).orElse(user);
+            }
+        }
         return user;
+    }
+
+    /** HMAC of the normalised mailbox; null for an empty email. */
+    private String mailboxHash(String email) {
+        return hasher.hash(Validate.mailbox(email));
     }
 
     /** Body: Profile + {fingerprint, turnstileToken}. Runs the bot check and the duplicate check. */
@@ -87,39 +102,52 @@ public final class UserService {
         }
 
         Instant now = clock.instant();
-        User user = me(claims, clientIp);
-        user.name = name;
-        user.company = company;
-        user.linkedin = linkedin;
-        if (user.consentAt == null) user.consentAt = now;
-        user.fingerprintHash = hasher.hash(fingerprint);
-        user.ipHash = hasher.hash(clientIp);
-        user.lastSeenAt = now;
+        me(claims, clientIp);
+        String fingerprintHash = hasher.hash(fingerprint);
+        String ipHash = hasher.hash(clientIp);
+        boolean admin = isAdmin(claims);
+        boolean[] heldNow = new boolean[1];
+        // Read-modify-write with the ETag: an admin decision made meanwhile is never overwritten.
+        User user = UserRows.update(users, claims.oid(), u -> {
+            heldNow[0] = false;
+            u.name = name;
+            u.company = company;
+            u.linkedin = linkedin;
+            if (u.consentAt == null) u.consentAt = now;
+            u.fingerprintHash = fingerprintHash;
+            u.ipHash = ipHash;
+            u.mailboxHash = mailboxHash(u.email);
+            u.lastSeenAt = now;
 
-        boolean sameDevice = false;
-        boolean sameIp = false;
-        for (User other : users.list()) {
-            if (other.id.equals(user.id)) continue;
-            if (user.fingerprintHash != null && user.fingerprintHash.equals(other.fingerprintHash)) sameDevice = true;
-            if (user.ipHash != null && user.ipHash.equals(other.ipHash)) sameIp = true;
-        }
-        boolean heldNow = false;
-        if (sameDevice) {
-            user.flags.add(FLAG_SAME_DEVICE);
-            if (User.ACTIVE.equals(user.status) && !user.approvedByAdmin && !isAdmin(claims)) {
-                user.status = User.HELD;
-                heldNow = true;
+            boolean sameDevice = false;
+            boolean sameMailbox = false;
+            boolean sameIp = false;
+            for (User other : users.list()) {
+                if (other.id.equals(u.id)) continue;
+                if (u.fingerprintHash != null && u.fingerprintHash.equals(other.fingerprintHash)) sameDevice = true;
+                // The fingerprint comes from the client; the mailbox comes from the token.
+                String otherMailbox = other.mailboxHash != null ? other.mailboxHash : mailboxHash(other.email);
+                if (u.mailboxHash != null && u.mailboxHash.equals(otherMailbox)) sameMailbox = true;
+                if (u.ipHash != null && u.ipHash.equals(other.ipHash)) sameIp = true;
             }
-        } else if (sameIp) {
-            user.flags.add(FLAG_SAME_IP);
-        }
-        users.save(user);
+            if (sameDevice) u.flags.add(FLAG_SAME_DEVICE);
+            if (sameMailbox) u.flags.add(FLAG_SAME_MAILBOX);
+            if (sameDevice || sameMailbox) {
+                if (User.ACTIVE.equals(u.status) && !u.approvedByAdmin && !admin) {
+                    u.status = User.HELD;
+                    heldNow[0] = true;
+                }
+            } else if (sameIp) {
+                u.flags.add(FLAG_SAME_IP);
+            }
+        }).orElseThrow(ApiException::notFound);
         audit.record(user.id, "profile.update", user.id, user.ipHash);
-        if (heldNow) {
+        if (heldNow[0]) {
             audit.record("gateway", "user.hold", user.id, user.ipHash);
             mailer.sendToOwner("Consignado: account held",
-                    "The duplicate check held an account (same device as another account).\nName: " + user.name
-                            + "\nEmail: " + user.email + "\nId: " + user.id);
+                    "The duplicate check held an account (same device or same mailbox as another account).\nName: "
+                            + user.name + "\nEmail: " + user.email + "\nId: " + user.id + "\nFlags: "
+                            + String.join(", ", user.flags));
         }
         return user;
     }
