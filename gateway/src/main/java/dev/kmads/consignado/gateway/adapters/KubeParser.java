@@ -61,6 +61,26 @@ final class KubeParser {
         return out;
     }
 
+    static List<ClusterView.Deployment> deployments(JsonNode list) {
+        List<ClusterView.Deployment> out = new ArrayList<>();
+        for (JsonNode item : list.path("items")) {
+            out.add(new ClusterView.Deployment(item.path("metadata").path("name").asText(""),
+                    item.path("spec").path("replicas").asInt(1), item.path("status").path("readyReplicas").asInt(0)));
+        }
+        return out;
+    }
+
+    static List<ClusterView.Hpa> autoscalers(JsonNode list) {
+        List<ClusterView.Hpa> out = new ArrayList<>();
+        for (JsonNode item : list.path("items")) {
+            out.add(new ClusterView.Hpa(item.path("metadata").path("name").asText(""),
+                    item.path("status").path("currentReplicas").asInt(0),
+                    item.path("status").path("desiredReplicas").asInt(0),
+                    item.path("spec").path("minReplicas").asInt(1), item.path("spec").path("maxReplicas").asInt(0)));
+        }
+        return out;
+    }
+
     /** The number of ready addresses of all Endpoints objects in the namespace. */
     static int readyEndpoints(JsonNode list) {
         int count = 0;

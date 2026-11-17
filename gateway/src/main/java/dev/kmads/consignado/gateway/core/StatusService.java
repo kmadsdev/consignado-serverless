@@ -30,7 +30,12 @@ public final class StatusService {
     static final String NOT_CONFIGURED = "not configured";
 
     /** The Azure resource ids; null when the environment variable is missing. */
-    public record Ids(String gatewayApp, String apiApp, String keyVault, String postgres, String aks) {}
+    public record Ids(String gatewayApp, String apiApp, String keyVault, String postgres, String aks,
+                      String appInsights) {
+        public Ids(String gatewayApp, String apiApp, String keyVault, String postgres, String aks) {
+            this(gatewayApp, apiApp, keyVault, postgres, aks, null);
+        }
+    }
 
     /** The signing keys of Entra ID: makes sure they are loaded and returns when they were fetched. */
     @FunctionalInterface
@@ -48,6 +53,8 @@ public final class StatusService {
     private final Executor executor;
     private final Map<HostKind, Views.PlatformStatus> cache = new java.util.EnumMap<>(HostKind.class);
     private final Map<HostKind, Instant> cachedAt = new java.util.EnumMap<>(HostKind.class);
+    /** The request metrics of the answer being built (build runs under the lock of status()). */
+    private CompletableFuture<Optional<JsonNode>> requests = CompletableFuture.completedFuture(Optional.empty());
 
     public StatusService(AzureMonitor monitor, ClusterControl cluster, ClusterObserver observer, Upstream upstream,
                          SigningKeys keys, Ids ids, Clock clock, Executor executor) {
@@ -106,6 +113,11 @@ public final class StatusService {
         var kvMetrics = metrics(ids.keyVault(), "keyvault");
         var pgRes = resource(ids.postgres());
         var pgMetrics = metrics(ids.postgres(), "database");
+        // One Application Insights call gives requests, failures and duration of both function apps.
+        CompletableFuture<Optional<JsonNode>> requests = ids.appInsights() == null
+                ? CompletableFuture.completedFuture(Optional.empty())
+                : async(() -> monitor.requestMetrics(ids.appInsights()), Optional.empty());
+        this.requests = requests;
         CompletableFuture<Optional<Instant>> keysAt = async(() -> {
             try {
                 return Optional.ofNullable(keys.fetchedAt());
@@ -134,6 +146,9 @@ public final class StatusService {
             CompletableFuture<ClusterView> view = power.thenComposeAsync(p -> p.running()
                     ? async(observer::observe, ClusterView.DOWN)
                     : CompletableFuture.completedFuture(null), executor);
+            CompletableFuture<Optional<ClusterView.Workload>> workload = power.thenComposeAsync(p -> p.running()
+                    ? async(observer::workload, Optional.<ClusterView.Workload>empty())
+                    : CompletableFuture.completedFuture(Optional.<ClusterView.Workload>empty()), executor);
             CompletableFuture<Probe> probe = power.thenComposeAsync(p -> p.running()
                     ? async(this::probe, new Probe(0, 0)) : CompletableFuture.completedFuture(null), executor);
             out.add(functionApp("gateway", ids.gatewayApp(), "Azure Function (Java)", gwRes, gwHealth, gwMetrics));
@@ -142,7 +157,7 @@ public final class StatusService {
             out.add(loadBalancer(power.join(), probe.join()));
             out.add(clusterService(power.join(), aksRes.join()));
             out.add(node(power.join(), view.join(), nodeMetrics.join()));
-            out.add(pods(power.join(), view.join(), now));
+            out.add(pods(power.join(), view.join(), workload.join(), now));
         }
         out.add(database(pgRes, pgMetrics));
         return new Views.PlatformStatus(Times.iso(now), host.id(), out);
@@ -204,8 +219,9 @@ public final class StatusService {
         Optional<JsonNode> r = res.join();
         Optional<JsonNode> m = metrics.join();
         String h = healthState(health.join());
-        List<String> source = sources(r, h, m);
-        if (r.isEmpty() && m.isEmpty() && h == null) {
+        Optional<JsonNode> req = requests.join();
+        List<String> source = sources(r, h, m.isPresent() ? m : req);
+        if (r.isEmpty() && m.isEmpty() && h == null && req.isEmpty()) {
             return new Views.ServiceStatus(id, name, kind, null, "unknown", "Azure did not answer", List.of(), source);
         }
         String armState = r.map(x -> x.path("properties").path("state").asText(null)).orElse(null);
@@ -215,8 +231,10 @@ public final class StatusService {
         if (id.equals("gateway") && !"up".equals(state)) state = "up";
         state = withHealth(state, h);
         String detail = (armState == null ? "state not readable" : "State " + armState) + "; " + healthText(h);
-        return new Views.ServiceStatus(id, name, kind, region(r), state, detail,
-                m.map(x -> StatusMetrics.metrics(id, x)).orElse(List.of()), source);
+        List<Views.Metric> shown = new ArrayList<>();
+        req.ifPresent(x -> shown.addAll(StatusMetrics.requestMetrics(x, name)));
+        m.ifPresent(x -> shown.addAll(StatusMetrics.metrics(id, x)));
+        return new Views.ServiceStatus(id, name, kind, region(r), state, detail, shown, source);
     }
 
     private static List<String> sources(Optional<JsonNode> resource, String health, Optional<JsonNode> metrics) {
@@ -351,7 +369,8 @@ public final class StatusService {
                 ready + " of " + total + " nodes Ready (seen through the pods)", m, source);
     }
 
-    private Views.ServiceStatus pods(PowerState p, ClusterView view, Instant now) {
+    private Views.ServiceStatus pods(PowerState p, ClusterView view, Optional<ClusterView.Workload> workload,
+                                     Instant now) {
         String kind = "Pods";
         String name = "consignado-api";
         if (!p.running() || view == null) return stoppedPart("pods", name, kind, p);
@@ -375,8 +394,25 @@ public final class StatusService {
             detail.append(", newest pod ").append(Math.max(0, Duration.between(newest, now).toMinutes()))
                     .append(" min old");
         }
+        double replicas = ready;
+        String replicasLabel = "Ready pods (from the pod list)";
+        ClusterView.Deployment deployment = workload.flatMap(wl -> wl.deployments().stream()
+                .filter(d -> d.name().equals(name)).findFirst()
+                .or(() -> wl.deployments().stream().findFirst())).orElse(null);
+        if (deployment != null) {
+            replicas = deployment.ready();
+            replicasLabel = "Ready replicas of " + deployment.desired() + " desired";
+            detail.append("; Deployment ").append(deployment.name()).append(": ").append(deployment.ready())
+                    .append(" of ").append(deployment.desired()).append(" replicas ready");
+            if (deployment.desired() > 0 && deployment.ready() < deployment.desired() && "up".equals(state)) {
+                state = "degraded";
+            }
+        }
+        workload.flatMap(wl -> wl.autoscalers().stream().findFirst()).ifPresent(h -> detail.append("; HPA ")
+                .append(h.name()).append(": current ").append(h.current()).append(", desired ").append(h.desired())
+                .append(" (").append(h.min()).append(" to ").append(h.max()).append(")"));
         List<Views.Metric> m = List.of(
-                new Views.Metric("replicas", "Ready pods", (double) ready, "count", "now"),
+                new Views.Metric("replicas", replicasLabel, replicas, "count", "now"),
                 new Views.Metric("restarts", "Restarts", (double) restarts, "count", "now"));
         return new Views.ServiceStatus("pods", name, kind, null, state, detail.toString(), m, List.of("kubernetes"));
     }

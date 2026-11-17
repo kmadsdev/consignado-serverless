@@ -94,6 +94,8 @@ public final class World {
         public int starts;
         public int stops;
         public int observations;
+        public Optional<ClusterView.Workload> workload = Optional.empty();
+        @Override public Optional<ClusterView.Workload> workload() { return workload; }
         @Override public PowerState powerState() { return power; }
         @Override public boolean start() { starts++; if (accept) power = new PowerState("Running", "Starting"); return accept; }
         @Override public boolean stop() { stops++; if (accept) power = new PowerState("Running", "Stopping"); return accept; }
@@ -151,6 +153,7 @@ public final class World {
         }
         @Override public Optional<JsonNode> metrics(String id, List<String> names) { return answer(metrics, id); }
         @Override public Optional<JsonNode> health(String id) { return answer(health, id); }
+        @Override public Optional<JsonNode> requestMetrics(String id) { return answer(metrics, id); }
         @Override public Optional<JsonNode> resource(String id) { return answer(resources, id); }
     }
 
@@ -159,7 +162,8 @@ public final class World {
             SUB + "Microsoft.Web/sites/func-consignado-gw-km01", SUB + "Microsoft.Web/sites/func-consignado-api-km01",
             SUB + "Microsoft.KeyVault/vaults/kv-consig-km01",
             SUB + "Microsoft.DBforPostgreSQL/flexibleServers/psql-consignado-km01",
-            SUB + "Microsoft.ContainerService/managedClusters/aks-consignado");
+            SUB + "Microsoft.ContainerService/managedClusters/aks-consignado",
+            SUB + "Microsoft.Insights/components/appi-consignado");
 
     public final Monitor monitor = new Monitor();
     public Instant keysFetchedAt = Instant.parse("2026-11-17T11:57:00Z");

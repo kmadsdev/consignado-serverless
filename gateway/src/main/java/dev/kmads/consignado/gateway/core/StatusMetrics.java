@@ -22,7 +22,7 @@ public final class StatusMetrics {
     public static final Map<String, List<Def>> TABLE = new LinkedHashMap<>();
     static {
         List<Def> functionApp = List.of(
-                new Def("OnDemandFunctionExecutionCount", Agg.TOTAL, "requests", "Function executions", "count", 1),
+                new Def("OnDemandFunctionExecutionCount", Agg.TOTAL, "executions", "Function executions", "count", 1),
                 new Def("InstanceCount", Agg.AVERAGE, "instances", "Instances", "count", 1),
                 new Def("CpuPercentage", Agg.AVERAGE, "cpu", "CPU", "%", 1),
                 new Def("MemoryWorkingSet", Agg.AVERAGE, "memory", "Memory working set", "MB", 1.0 / (1024 * 1024)));
@@ -93,6 +93,73 @@ public final class StatusMetrics {
             };
         }
         return null;
+    }
+
+    /**
+     * The request metrics of one function app from the Application Insights answer (split by cloud/roleName):
+     * requests = sum of Count; errors = sum of Count of requests/failed (Azure sends no series for a role
+     * with no failed request: 0 when the metric is in the answer, null when it is not); latency-avg = mean of the
+     * minute averages weighted by their counts. requests/duration offers only Average, Minimum and Maximum,
+     * so there is no p95.
+     */
+    public static List<Views.Metric> requestMetrics(JsonNode answer, String roleName) {
+        Double count = null;
+        Double failed = null;
+        double weighted = 0;
+        double weight = 0;
+        for (JsonNode v : answer.path("value")) {
+            String name = v.path("name").path("value").asText();
+            JsonNode series = seriesOf(v, roleName);
+            switch (name) {
+                case "requests/count" -> count = series == null ? null : sum(series, "count");
+                case "requests/failed" -> {
+                    Double f = series == null ? null : sum(series, "count");
+                    failed = f != null ? f : 0.0;
+                }
+                case "requests/duration" -> {
+                    if (series != null) {
+                        for (JsonNode p : series.path("data")) {
+                            JsonNode a = p.get("average");
+                            JsonNode c = p.get("count");
+                            if (a == null || !a.isNumber() || c == null || !c.isNumber() || c.asDouble() <= 0) continue;
+                            weighted += a.asDouble() * c.asDouble();
+                            weight += c.asDouble();
+                        }
+                    }
+                }
+                default -> { }
+            }
+        }
+        Double latency = weight > 0 ? round(weighted / weight) : null;
+        return List.of(
+                new Views.Metric("requests", "Requests", count, "count", "last 5 min"),
+                new Views.Metric("errors", "Failed requests", failed, "count", "last 5 min"),
+                new Views.Metric("latency-avg", "Average response time", latency, "ms", "last 5 min"));
+    }
+
+    /** The series of one cloud/roleName (Azure returns the dimension name in lower case). */
+    private static JsonNode seriesOf(JsonNode metric, String roleName) {
+        for (JsonNode ts : metric.path("timeseries")) {
+            for (JsonNode m : ts.path("metadatavalues")) {
+                if (m.path("name").path("value").asText().equalsIgnoreCase("cloud/roleName")
+                        && m.path("value").asText().equalsIgnoreCase(roleName)) {
+                    return ts;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static Double sum(JsonNode series, String field) {
+        double s = 0;
+        int n = 0;
+        for (JsonNode p : series.path("data")) {
+            JsonNode x = p.get(field);
+            if (x == null || !x.isNumber()) continue;
+            s += x.asDouble();
+            n++;
+        }
+        return n == 0 ? null : s;
     }
 
     private static double round(double v) {

@@ -39,6 +39,14 @@ public final class ArmMonitor implements AzureMonitor {
                 + "&timespan=PT5M&interval=PT1M&aggregation=Average,Total,Maximum";
     }
 
+    static String requestMetricsUrl(String appInsightsId) {
+        return ARM + appInsightsId + "/providers/Microsoft.Insights/metrics?api-version=" + METRICS_API
+                + "&metricnames=" + URLEncoder.encode("requests/count,requests/failed,requests/duration",
+                        StandardCharsets.UTF_8)
+                + "&timespan=PT5M&interval=PT1M&aggregation=Average,Count"
+                + "&$filter=" + URLEncoder.encode("cloud/roleName eq '*'", StandardCharsets.UTF_8).replace("+", "%20");
+    }
+
     static String healthUrl(String resourceId) {
         return ARM + resourceId + "/providers/Microsoft.ResourceHealth/availabilityStatuses/current?api-version="
                 + HEALTH_API;
@@ -58,6 +66,11 @@ public final class ArmMonitor implements AzureMonitor {
     @Override
     public Optional<JsonNode> metrics(String resourceId, List<String> metricNames) {
         return get(metricsUrl(resourceId, metricNames), "metrics");
+    }
+
+    @Override
+    public Optional<JsonNode> requestMetrics(String appInsightsId) {
+        return get(requestMetricsUrl(appInsightsId), "request metrics");
     }
 
     @Override

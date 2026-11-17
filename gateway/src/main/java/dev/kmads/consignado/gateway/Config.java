@@ -12,7 +12,7 @@ public record Config(
         String keyVaultUrl, String storageAccount, String ownerEmail, int windowMinutes, int windowsMax,
         int cooldownMinutes, double budgetLimitUsd, String acsEndpoint, String acsSender, boolean allowDevOrigin,
         boolean edgeKeyRequired, int dailyWindowsMax, String spaClientId, java.util.List<String> turnstileHostnames,
-        String gatewayAppId, String apiAppId, String keyVaultId, String postgresId) {
+        String gatewayAppId, String apiAppId, String keyVaultId, String postgresId, String appInsightsId) {
 
     /** The only value of EDGE that turns the edge-key check off. Missing or any other value: the key is required. */
     public static final String EDGE_LOCAL = "local";
@@ -59,7 +59,8 @@ public record Config(
                 resourceId(env, "GATEWAY_APP_ID"),
                 resourceId(env, "API_APP_ID"),
                 resourceId(env, "KEY_VAULT_ID"),
-                resourceId(env, "POSTGRES_ID"));
+                resourceId(env, "POSTGRES_ID"),
+                resourceId(env, "APPINSIGHTS_ID"));
         if (!AKS_ID.matcher(c.aksResourceId).matches()) throw invalid("AKS_RESOURCE_ID");
         if (!STORAGE.matcher(c.storageAccount).matches()) throw invalid("STORAGE_ACCOUNT");
         return c;
