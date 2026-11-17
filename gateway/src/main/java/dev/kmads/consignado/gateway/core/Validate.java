@@ -6,6 +6,26 @@ import java.util.regex.Pattern;
 
 /** Input checks. Every message is generic and names only the field. */
 public final class Validate {
+    /**
+     * The mailbox behind an address, for the duplicate check: lower case, no "+tag",
+     * and for gmail.com and googlemail.com no dots in the local part. Empty for an empty address.
+     */
+    public static String mailbox(String email) {
+        if (email == null) return "";
+        String e = email.strip().toLowerCase(java.util.Locale.ROOT);
+        int at = e.lastIndexOf('@');
+        if (at < 1 || at == e.length() - 1) return e;
+        String local = e.substring(0, at);
+        String domain = e.substring(at + 1);
+        int plus = local.indexOf('+');
+        if (plus >= 0) local = local.substring(0, plus);
+        if (domain.equals("gmail.com") || domain.equals("googlemail.com")) {
+            local = local.replace(".", "");
+            domain = "gmail.com";
+        }
+        return local + "@" + domain;
+    }
+
     private Validate() {}
 
     private static final Pattern EMAIL =

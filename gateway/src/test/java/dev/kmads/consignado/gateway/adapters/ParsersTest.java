@@ -97,4 +97,43 @@ class ParsersTest {
         IllegalStateException e = assertThrows(IllegalStateException.class, () -> KubeClusterObserver.trustOnly("bm90IGEgY2VydA=="));
         assertEquals("Invalid environment variable: AKS_CA_CERT_B64", e.getMessage());
     }
+
+    @Test
+    void podTimesAndImageEvents() throws Exception {
+        com.fasterxml.jackson.databind.JsonNode pods = dev.kmads.consignado.gateway.core.Json.MAPPER.readTree("""
+            {"items":[{"metadata":{"name":"consignado-api-1","creationTimestamp":"2026-11-17T20:00:00Z"},
+              "spec":{"nodeName":"n1"},
+              "status":{"phase":"Running","startTime":"2026-11-17T20:00:01Z",
+                "conditions":[{"type":"PodScheduled","status":"True","lastTransitionTime":"2026-11-17T20:00:01Z"},
+                  {"type":"PodReadyToStartContainers","status":"True","lastTransitionTime":"2026-11-17T20:00:04Z"},
+                  {"type":"Initialized","status":"True","lastTransitionTime":"2026-11-17T20:00:01Z"},
+                  {"type":"ContainersReady","status":"True","lastTransitionTime":"2026-11-17T20:01:00Z"},
+                  {"type":"Ready","status":"False","lastTransitionTime":"2026-11-17T20:00:01Z"}],
+                "containerStatuses":[{"name":"api","image":"cr.io/consignado-api:abc123","imageID":"x","restartCount":2,
+                  "state":{"running":{"startedAt":"2026-11-17T20:00:35Z"}}}]}}]}
+            """);
+        dev.kmads.consignado.gateway.core.ClusterView.Pod pod = KubeParser.pods(pods).get(0);
+        var t = pod.times();
+        assertEquals(java.time.Instant.parse("2026-11-17T20:00:01Z"), t.scheduled());
+        assertEquals(java.time.Instant.parse("2026-11-17T20:00:04Z"), t.volumesReady());
+        assertEquals(java.time.Instant.parse("2026-11-17T20:00:35Z"), t.containerRunning());
+        assertEquals(java.time.Instant.parse("2026-11-17T20:01:00Z"), t.containersReady());
+        assertNull(t.ready(), "a condition that is not True has no time");
+        assertEquals(2, pod.restarts());
+        assertEquals("abc123", pod.containers().get(0).imageTag());
+
+        var pulled = KubeParser.imagePull(dev.kmads.consignado.gateway.core.Json.MAPPER.readTree("""
+            {"items":[{"reason":"Scheduled","lastTimestamp":"2026-11-17T20:00:01Z"},
+              {"reason":"Pulling","lastTimestamp":"2026-11-17T20:00:05Z"},
+              {"reason":"Pulled","message":"Successfully pulled image in 25s","eventTime":"2026-11-17T20:00:30.123456Z"}]}
+            """));
+        assertFalse(pulled.alreadyPresent());
+        assertEquals(java.time.Instant.parse("2026-11-17T20:00:05Z"), pulled.pullingAt());
+        assertEquals(java.time.Instant.parse("2026-11-17T20:00:30.123456Z"), pulled.pulledAt());
+        var present = KubeParser.imagePull(dev.kmads.consignado.gateway.core.Json.MAPPER.readTree("""
+            {"items":[{"reason":"Pulled","message":"Container image x already present on machine",
+              "lastTimestamp":"2026-11-17T20:00:05Z"},{"reason":"Pulled","lastTimestamp":"not a time"}]}
+            """));
+        assertTrue(present.alreadyPresent());
+    }
 }

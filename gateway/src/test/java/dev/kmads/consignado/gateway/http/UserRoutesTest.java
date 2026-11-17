@@ -199,7 +199,7 @@ class UserRoutesTest {
                 "{\"action\":\"block\"}"))).get("status").asText());
         assertEquals("held", World.json(w.handlers.admin(World.req("POST", "users/u1", admin, null,
                 "{\"action\":\"hold\"}"))).get("status").asText());
-        assertEquals(400, w.handlers.admin(World.req("POST", "users/u1", admin, null, "{\"action\":\"delete\"}")).status());
+        assertEquals(400, w.handlers.admin(World.req("POST", "users/u1", admin, null, "{\"action\":\"remove\"}")).status());
         assertEquals(400, w.handlers.admin(World.req("POST", "users/u1", admin, null, "{\"action\":\"grant\",\"windows\":999}")).status());
         assertEquals(404, w.handlers.admin(World.req("POST", "users/nobody", admin, null, "{\"action\":\"block\"}")).status());
         assertEquals(404, w.handlers.admin(World.req("GET", "secrets", admin, null, null)).status());

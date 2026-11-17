@@ -1,0 +1,189 @@
+{
+ "cost": 48,
+ "interval": "PT1M",
+ "namespace": "Microsoft.Web/sites",
+ "resourceregion": "belgiumcentral",
+ "timespan": "2026-11-17T20:44:28Z/2026-11-17T20:49:28Z",
+ "value": [
+  {
+   "displayDescription": "On Demand Function Execution Count. For Flex Consumption FunctionApps only.",
+   "errorCode": "Success",
+   "id": "<id removed>",
+   "name": {
+    "localizedValue": "On Demand Function Execution Count",
+    "value": "OnDemandFunctionExecutionCount"
+   },
+   "timeseries": [
+    {
+     "data": [
+      {
+       "average": 0,
+       "maximum": 0,
+       "timeStamp": "2026-11-17T20:44:00Z",
+       "total": 0
+      },
+      {
+       "average": 0,
+       "maximum": 0,
+       "timeStamp": "2026-11-17T20:45:00Z",
+       "total": 0
+      },
+      {
+       "average": 0,
+       "maximum": 0,
+       "timeStamp": "2026-11-17T20:46:00Z",
+       "total": 0
+      },
+      {
+       "average": 0,
+       "maximum": 0,
+       "timeStamp": "2026-11-17T20:47:00Z",
+       "total": 0
+      },
+      {
+       "average": 0,
+       "maximum": 0,
+       "timeStamp": "2026-11-17T20:48:00Z",
+       "total": 0
+      }
+     ],
+     "metadatavalues": []
+    }
+   ],
+   "type": "Microsoft.Insights/metrics",
+   "unit": "Count"
+  },
+  {
+   "displayDescription": "The number of instances on which this app is running.",
+   "errorCode": "Success",
+   "id": "<id removed>",
+   "name": {
+    "localizedValue": "Automatic Scaling Instance Count",
+    "value": "InstanceCount"
+   },
+   "timeseries": [
+    {
+     "data": [
+      {
+       "average": 1,
+       "maximum": 1,
+       "timeStamp": "2026-11-17T20:44:00Z",
+       "total": 2
+      },
+      {
+       "timeStamp": "2026-11-17T20:45:00Z"
+      },
+      {
+       "timeStamp": "2026-11-17T20:46:00Z"
+      },
+      {
+       "timeStamp": "2026-11-17T20:47:00Z"
+      },
+      {
+       "timeStamp": "2026-11-17T20:48:00Z"
+      }
+     ],
+     "metadatavalues": []
+    }
+   ],
+   "type": "Microsoft.Insights/metrics",
+   "unit": "Count"
+  },
+  {
+   "displayDescription": "The average percentage of CPU being used. For Flex Consumption function apps only.",
+   "errorCode": "Success",
+   "id": "<id removed>",
+   "name": {
+    "localizedValue": "Percentage CPU",
+    "value": "CpuPercentage"
+   },
+   "timeseries": [
+    {
+     "data": [
+      {
+       "average": 0,
+       "maximum": 0,
+       "timeStamp": "2026-11-17T20:44:00Z",
+       "total": 0
+      },
+      {
+       "average": 0,
+       "maximum": 0,
+       "timeStamp": "2026-11-17T20:45:00Z",
+       "total": 0
+      },
+      {
+       "average": 0,
+       "maximum": 0,
+       "timeStamp": "2026-11-17T20:46:00Z",
+       "total": 0
+      },
+      {
+       "average": 0,
+       "maximum": 0,
+       "timeStamp": "2026-11-17T20:47:00Z",
+       "total": 0
+      },
+      {
+       "average": 0,
+       "maximum": 0,
+       "timeStamp": "2026-11-17T20:48:00Z",
+       "total": 0
+      }
+     ],
+     "metadatavalues": []
+    }
+   ],
+   "type": "Microsoft.Insights/metrics",
+   "unit": "Percent"
+  },
+  {
+   "displayDescription": "The current amount of memory used by the app, in MiB. For WebApps and FunctionApps.",
+   "errorCode": "Success",
+   "id": "<id removed>",
+   "name": {
+    "localizedValue": "Memory working set",
+    "value": "MemoryWorkingSet"
+   },
+   "timeseries": [
+    {
+     "data": [
+      {
+       "average": 644919296,
+       "maximum": 644980736,
+       "timeStamp": "2026-11-17T20:44:00Z",
+       "total": 644919296
+      },
+      {
+       "average": 0,
+       "maximum": 0,
+       "timeStamp": "2026-11-17T20:45:00Z",
+       "total": 0
+      },
+      {
+       "average": 0,
+       "maximum": 0,
+       "timeStamp": "2026-11-17T20:46:00Z",
+       "total": 0
+      },
+      {
+       "average": 0,
+       "maximum": 0,
+       "timeStamp": "2026-11-17T20:47:00Z",
+       "total": 0
+      },
+      {
+       "average": 0,
+       "maximum": 0,
+       "timeStamp": "2026-11-17T20:48:00Z",
+       "total": 0
+      }
+     ],
+     "metadatavalues": []
+    }
+   ],
+   "type": "Microsoft.Insights/metrics",
+   "unit": "Bytes"
+  }
+ ]
+}
