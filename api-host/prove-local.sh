@@ -32,6 +32,8 @@ code() { curl -s -o /dev/null -w '%{http_code}' -m 30 "$@"; }
 [ -f "$ZIP" ] || { echo "run ./build.sh first: $ZIP not found" >&2; exit 1; }
 cleanup; mkdir -p "$WORK/wwwroot" "$WORK/secrets"
 unzip -q "$ZIP" -d "$WORK/wwwroot"          # the proof uses the zip, not the build folder
+# Optional: HOST_JSON=<file> replaces host.json, to try a host setting without a new build.
+if [ -n "${HOST_JSON:-}" ]; then cp "$HOST_JSON" "$WORK/wwwroot/host.json"; echo "host.json replaced by $HOST_JSON"; fi
 
 # Throwaway keys for the local host only. They are made here, never printed, and removed at the end.
 DB_PW="$(openssl rand -hex 16)"
@@ -84,6 +86,9 @@ POOL="$(curl -s -m 30 -H "x-functions-key: $FN_KEY" "$BASE/actuator/metrics/hika
 check "Hikari maximum pool size from config/application.properties" 3.0 "$POOL"
 RELAY="$(docker logs apihost-func 2>&1 | grep -c 'scheduling-' || true)"
 check "outbox relay thread log lines (relay is off)" 0 "$RELAY"
+if [ -f "$WORK/wwwroot/app/consignado-api.jsa" ]; then
+  check "CDS archive accepted by the JVM (warnings in the log)" 0 "$(docker logs apihost-func 2>&1 | grep -c -E '\[warning\]\[cds' || true)"
+fi
 echo "      Location header of the 201: $(grep -i '^location:' "$WORK/headers.txt" | tr -d '\r' | cut -d' ' -f2)"
 
 echo "== measurements (linux/amd64 under emulation when the machine is arm64: $(uname -m)) =="

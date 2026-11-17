@@ -11,12 +11,14 @@
 #   API_REPO       git URL for --ref            (default https://github.com/kmadsdev/consignado-api.git)
 #   JDK_IMAGE      build image                  (default eclipse-temurin:21-jdk-noble)
 #   JAR_PLATFORM   platform of the Maven build  (default: the Docker default; the jar has no native code)
+#   CDS            1 (default) adds an application CDS archive; 0 packages the fat jar as it is
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 API_REPO="${API_REPO:-https://github.com/kmadsdev/consignado-api.git}"
 JDK_IMAGE="${JDK_IMAGE:-eclipse-temurin:21-jdk-noble}"
 RUNTIME_PLATFORM="linux/amd64"   # the Flex Consumption instance is Linux x64
+CDS="${CDS:-1}"                  # 1 = add an application class data sharing archive
 CACHE="$HERE/.cache"
 DIST="$HERE/dist"
 PKG="$DIST/package"
@@ -48,7 +50,7 @@ fi
 API_COMMIT="$(git -C "$SRC" rev-parse HEAD 2>/dev/null || echo unknown)"
 
 rm -rf "$DIST"
-mkdir -p "$PKG/app" "$CACHE/m2" "$DIST/work"
+mkdir -p "$PKG" "$CACHE/m2" "$DIST/work"
 
 # ---- 1. jar + module list (platform independent) -------------------------------------------
 log "build the jar (source $SRC, commit $API_COMMIT)"
@@ -62,26 +64,43 @@ docker run --rm --name apihost-build-jar ${JAR_PLATFORM:+--platform "$JAR_PLATFO
     ./mvnw -B -ntp -DskipTests -Dmaven.repo.local=/cache/m2/repository package
     cp target/consignado-api.jar /out/consignado-api.jar
     mkdir /x && cd /x && jar -xf /out/consignado-api.jar
-    found="$(jdeps --ignore-missing-deps --multi-release 21 --print-module-deps \
-               --class-path "BOOT-INF/lib/*" BOOT-INF/classes BOOT-INF/lib/*.jar 2>/dev/null || true)"
+    found="$(jdeps --ignore-missing-deps --multi-release 21 --print-module-deps --recursive \
+               --class-path "BOOT-INF/lib/*" BOOT-INF/classes 2>/dev/null | grep -E "^(java|jdk)\.[a-z.,]+$" || true)"
     printf "%s,%s" "$BASE_MODULES" "$found" | tr "," "\n" | grep -E "^(java|jdk)\.[a-z.]+$" | sort -u | paste -sd, - > /out/modules.txt
-    printf "%s" "$found" > /out/modules.jdeps.txt
+    echo "[build] jdeps found: ${found:-nothing}" >&2
   '
 MODULES="$(cat "$DIST/work/modules.txt")"
 [ -n "$MODULES" ] || die "empty module list"
 log "modules: $MODULES"
 
-# ---- 2. Java runtime for Linux x64 ----------------------------------------------------------
-log "build the Java runtime with jlink ($RUNTIME_PLATFORM)"
+# ---- 2. Java runtime for Linux x64 + class data sharing archive ------------------------------
+# The same runtime that will run in Azure makes the archive, so this step runs as linux/amd64.
+# The training run stops after the Spring context refresh and needs no database.
+log "build the Java runtime with jlink ($RUNTIME_PLATFORM), CDS=$CDS"
 docker run --rm --name apihost-build-runtime --platform "$RUNTIME_PLATFORM" \
-  -v "$DIST/work":/out -e MODULES="$MODULES" \
+  -v "$DIST/work":/in:ro -v "$PKG":/pkg -e MODULES="$MODULES" -e CDS="$CDS" \
   "$JDK_IMAGE" bash -euo pipefail -c '
-    rm -rf /out/runtime
+    mkdir /stage && cd /stage
     jlink --add-modules "$MODULES" --strip-debug --no-man-pages --no-header-files \
-          --compress zip-6 --generate-cds-archive --output /tmp/runtime
-    /tmp/runtime/bin/java -version 2>&1 | head -1 > /out/java-version.txt
-    # A plain copy without symbolic links: the package is a zip that the platform mounts.
-    cp -rL /tmp/runtime /out/runtime
+          --compress zip-6 --generate-cds-archive --output runtime
+    runtime/bin/java -version 2>&1 | head -1 > /pkg/java-version.txt
+    if [ "$CDS" = 1 ]; then
+      # Spring Boot "extract": the same classes and libraries as the fat jar, as plain jars that
+      # the JVM can archive (classes inside a nested jar cannot go into a CDS archive).
+      runtime/bin/java -Djarmode=tools -jar /in/consignado-api.jar extract --destination app
+      runtime/bin/java -XX:ArchiveClassesAtExit=app/consignado-api.jsa \
+        -XX:TieredStopAtLevel=1 -XX:+UseSerialGC -Dspring.context.exit=onRefresh \
+        -Dspring.flyway.enabled=false -Dspring.jpa.hibernate.ddl-auto=none \
+        -Dspring.jpa.database-platform=org.hibernate.dialect.PostgreSQLDialect \
+        -Dspring.jpa.properties.hibernate.boot.allow_jdbc_metadata_access=false \
+        -Dspring.sql.init.mode=never -Dconsignado.outbox.relay.enabled=false \
+        -jar app/consignado-api.jar > /tmp/training.log 2>&1 || { tail -40 /tmp/training.log; exit 1; }
+      test -s app/consignado-api.jsa
+    else
+      mkdir app && cp -p /in/consignado-api.jar app/consignado-api.jar
+    fi
+    # Copy without symbolic links and with the file times: the archive check compares them.
+    tar -chf - app runtime | tar -xf - -C /pkg
   '
 
 # ---- 3. package ------------------------------------------------------------------------------
@@ -90,15 +109,15 @@ cp "$HERE/host.json" "$PKG/host.json"
 mkdir -p "$PKG/proxy" "$PKG/config"
 cp "$HERE/proxy/function.json" "$PKG/proxy/function.json"
 cp "$HERE/config/application.properties" "$PKG/config/application.properties"
-cp "$DIST/work/consignado-api.jar" "$PKG/app/consignado-api.jar"
-cp -R "$DIST/work/runtime" "$PKG/runtime"
 chmod -R u+rwX,go+rX "$PKG"
 chmod 755 "$PKG"/runtime/bin/* "$PKG"/runtime/lib/jspawnhelper 2>/dev/null || true
+JAVA_VERSION="$(tr -d '"' < "$PKG/java-version.txt")"; rm -f "$PKG/java-version.txt"
 cat > "$PKG/build-info.json" <<JSON
 {
   "apiCommit": "$API_COMMIT",
-  "java": "$(tr -d '"' < "$DIST/work/java-version.txt")",
+  "java": "$JAVA_VERSION",
   "modules": "$MODULES",
+  "cdsArchive": $([ -f "$PKG/app/consignado-api.jsa" ] && echo true || echo false),
   "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 JSON
@@ -108,8 +127,8 @@ if find "$PKG" \( -name '.env*' -o -name 'local.settings.json' -o -name '*.pem' 
   die "a secret-like file is in the package"
 fi
 
-( cd "$PKG" && zip -q -r -X "$DIST/api-host.zip" . )
+( cd "$PKG" && zip -q -r "$DIST/api-host.zip" . )   # keeps modes and file times
 [ -x "$PKG/runtime/bin/java" ] || die "runtime/bin/java is not executable"
 rm -rf "$DIST/work"
 
-log "done: $DIST/api-host.zip ($(du -h "$DIST/api-host.zip" | cut -f1)), runtime $(du -sh "$PKG/runtime" | cut -f1), jar $(du -h "$PKG/app/consignado-api.jar" | cut -f1)"
+log "done: $DIST/api-host.zip ($(du -h "$DIST/api-host.zip" | cut -f1)), runtime $(du -sh "$PKG/runtime" | cut -f1), app $(du -sh "$PKG/app" | cut -f1)"

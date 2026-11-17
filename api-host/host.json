@@ -20,6 +20,7 @@
         "-XX:TieredStopAtLevel=1",
         "-XX:+UseSerialGC",
         "-Xshare:auto",
+        "-XX:SharedArchiveFile=app/consignado-api.jsa",
         "-XX:+ExitOnOutOfMemoryError",
         "-Dserver.port=%FUNCTIONS_CUSTOMHANDLER_PORT%",
         "-Dserver.shutdown=immediate",
