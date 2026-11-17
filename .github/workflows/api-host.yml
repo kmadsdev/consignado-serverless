@@ -1,0 +1,84 @@
+name: api-host
+
+# Builds the custom handler package (unchanged consignado-api jar + a jlink Java runtime) and
+# deploys it to the Flex Consumption function app.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "api-host/**"
+      - ".github/workflows/api-host.yml"
+  workflow_dispatch:
+    inputs:
+      api_ref:
+        description: "Git ref of kmadsdev/consignado-api to package (branch, tag or SHA)"
+        required: false
+        default: main
+  repository_dispatch:
+    types: [api-updated]   # sent by the consignado-api pipeline; client_payload.ref is optional
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: api-host-deploy
+  cancel-in-progress: false
+
+env:
+  API_REF: ${{ inputs.api_ref || github.event.client_payload.ref || 'main' }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check out kmadsdev/consignado-api
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kmadsdev/consignado-api
+          ref: ${{ env.API_REF }}
+          path: api-src
+          persist-credentials: false
+
+      - name: Build the package (jar + Java runtime, Linux x64)
+        run: ./api-host/build.sh "$GITHUB_WORKSPACE/api-src"
+
+      - name: Prove the package in the Functions host container (PostgreSQL beside it)
+        run: ./api-host/prove-local.sh | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Azure login (OIDC, no secret)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy the zip (Flex Consumption, no remote build)
+        env:
+          RG: ${{ vars.AZURE_RESOURCE_GROUP }}
+          APP: ${{ vars.API_HOST_APP_NAME }}
+        run: |
+          az functionapp deployment source config-zip \
+            --resource-group "$RG" --name "$APP" \
+            --src api-host/dist/api-host.zip
+
+      - name: State of the function app
+        env:
+          RG: ${{ vars.AZURE_RESOURCE_GROUP }}
+          APP: ${{ vars.API_HOST_APP_NAME }}
+        run: |
+          az functionapp show --resource-group "$RG" --name "$APP" \
+            --query "{name:name, state:state, kind:kind, host:defaultHostName}" -o table
+          {
+            echo "### api-host deployed"
+            echo "- consignado-api ref: \`$API_REF\`"
+            echo "- No smoke test from this runner: the app accepts traffic from the subnet \`snet-func\` only."
+            echo "- The package was proved before the deploy, in the Functions host container (step above)."
+            echo "- Live check: call \`GET /api/fn/api/v1/contracts\` through the gateway."
+          } >> "$GITHUB_STEP_SUMMARY"
