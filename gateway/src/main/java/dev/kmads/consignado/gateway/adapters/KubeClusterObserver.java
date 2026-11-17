@@ -65,16 +65,24 @@ public final class KubeClusterObserver implements ClusterObserver {
     public ClusterView observe() {
         try {
             String token = tokens.token(AzureTokens.AKS_SCOPE);
-            JsonNode nodes = get("/api/v1/nodes", token);
-            if (nodes == null) return ClusterView.DOWN;
+            // Any HTTP answer proves that the API server is up, also a 403.
             JsonNode pods = get("/api/v1/namespaces/" + NAMESPACE + "/pods", token);
             JsonNode endpoints = get("/api/v1/namespaces/" + NAMESPACE + "/endpoints", token);
-            return new ClusterView(true, KubeParser.nodes(nodes),
-                    pods == null ? List.of() : KubeParser.pods(pods),
+            // Nodes are cluster-scoped. The role "Azure Kubernetes Service RBAC Reader" cannot list them (403).
+            // Then the node comes from the pods: a pod with a running container proves that its node is Ready.
+            JsonNode nodes = get("/api/v1/nodes", token);
+            List<ClusterView.Pod> podList = pods == null ? List.of() : KubeParser.pods(pods);
+            List<ClusterView.Node> nodeList = nodes != null ? KubeParser.nodes(nodes) : KubeParser.nodesFromPods(podList);
+            ClusterView view = new ClusterView(true, nodeList, podList,
                     endpoints == null ? 0 : KubeParser.readyEndpoints(endpoints));
+            ClusterView.Pod best = view.bestPod();
+            LOG.log(Level.INFO, Logs.fmt("Kubernetes view: nodes {0} (from {1}), pods {2}, best pod {3} ready {4}, ready endpoints {5}",
+                    nodeList.size(), nodes != null ? "node list" : "pods", podList.size(),
+                    best == null ? "none" : best.name(), best != null && best.ready(), view.readyEndpoints()));
+            return view;
         } catch (Exception e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
-            LOG.log(Level.INFO, Logs.fmt("Kubernetes API not reachable: {0}", e.getClass().getSimpleName()));
+            LOG.log(Level.WARNING, Logs.fmt("Kubernetes API not reachable: {0}", Logs.of(e)));
             return ClusterView.DOWN;
         }
     }
@@ -87,7 +95,7 @@ public final class KubeClusterObserver implements ClusterObserver {
                 .GET().build();
         HttpResponse<byte[]> response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
         if (response.statusCode() != 200) {
-            LOG.log(Level.INFO, Logs.fmt("Kubernetes API GET: HTTP {0}", response.statusCode()));
+            LOG.log(Level.WARNING, Logs.fmt("Kubernetes API GET {0}: HTTP {1}", path, response.statusCode()));
             return null;
         }
         return Json.MAPPER.readTree(response.body());

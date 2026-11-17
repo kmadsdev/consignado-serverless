@@ -18,6 +18,19 @@ final class KubeParser {
         return out;
     }
 
+    /** When the node list cannot be read: each node that holds a pod with a running container is Ready. */
+    static List<ClusterView.Node> nodesFromPods(List<ClusterView.Pod> pods) {
+        java.util.Map<String, Boolean> nodes = new java.util.TreeMap<>();
+        for (ClusterView.Pod pod : pods) {
+            if (pod.node().isEmpty()) continue;
+            boolean alive = pod.containers().stream().anyMatch(ClusterView.Container::running);
+            nodes.merge(pod.node(), alive, Boolean::logicalOr);
+        }
+        List<ClusterView.Node> out = new ArrayList<>();
+        nodes.forEach((name, ready) -> out.add(new ClusterView.Node(name, ready)));
+        return out;
+    }
+
     static List<ClusterView.Pod> pods(JsonNode list) {
         List<ClusterView.Pod> out = new ArrayList<>();
         for (JsonNode item : list.path("items")) {
