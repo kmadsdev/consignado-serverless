@@ -57,16 +57,19 @@ public final class ArmClusterControl implements ClusterControl {
     }
 
     /**
-     * POST {id}/start or {id}/stop with an empty body. The HTTP client sets Content-Length itself:
-     * java.net.http refuses that header from the caller (IllegalArgumentException, the live defect of 2026-11-17).
+     * POST {id}/start or {id}/stop with an empty body. Two live defects of 2026-11-17 are fixed here:
+     * 1. java.net.http refuses the header Content-Length from the caller (IllegalArgumentException).
+     * 2. With HTTP/2 the client sends no Content-Length for an empty body, and ARM answers 411.
+     *    With HTTP/1.1 the client itself sends "Content-Length: 0".
      */
     static HttpRequest actionRequest(String resourceId, String action, String token) {
         if (!action.equals("start") && !action.equals("stop")) throw new IllegalArgumentException("action");
         return HttpRequest.newBuilder(URI.create(ARM + resourceId + "/" + action + "?api-version=" + API_VERSION))
+                .version(java.net.http.HttpClient.Version.HTTP_1_1)
                 .timeout(Duration.ofSeconds(20))
                 .header("Authorization", "Bearer " + token)
                 .header("Accept", "application/json")
-                .POST(HttpRequest.BodyPublishers.noBody()).build();
+                .POST(HttpRequest.BodyPublishers.ofByteArray(new byte[0])).build();
     }
 
     static PowerState parse(String body) throws Exception {
