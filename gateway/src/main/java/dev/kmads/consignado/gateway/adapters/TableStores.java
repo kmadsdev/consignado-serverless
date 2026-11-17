@@ -127,6 +127,7 @@ public final class TableStores {
                 put(e, "status", u.status);
                 put(e, "windowsUsed", u.windowsUsed);
                 put(e, "windowsMax", u.windowsMax);
+                put(e, "windowMinutes", u.windowMinutes);
                 put(e, "flags", String.join(",", u.flags));
                 put(e, "ipHash", u.ipHash);
                 put(e, "fingerprintHash", u.fingerprintHash);
@@ -177,6 +178,7 @@ public final class TableStores {
         u.status = strOr(e, "status", User.ACTIVE);
         u.windowsUsed = num(e, "windowsUsed");
         u.windowsMax = num(e, "windowsMax");
+        u.windowMinutes = num(e, "windowMinutes");
         u.flags = new TreeSet<>();
         for (String flag : strOr(e, "flags", "").split(",")) {
             if (!flag.isBlank()) u.flags.add(flag);

@@ -18,6 +18,8 @@ public final class User {
     public String status = ACTIVE;
     public int windowsUsed;
     public int windowsMax;
+    /** Length of this user's next windows; 0 = the default WINDOW_MINUTES (rows made before this column). */
+    public int windowMinutes;
     public Set<String> flags = new TreeSet<>();
     public String ipHash;
     public String fingerprintHash;
@@ -31,6 +33,10 @@ public final class User {
     public String mailboxHash;
     /** Storage version for optimistic concurrency. Null for a new row. */
     public String etag;
+
+    public int windowMinutes(Settings settings) {
+        return windowMinutes > 0 ? windowMinutes : (int) settings.window().toMinutes();
+    }
 
     public boolean profileComplete() {
         return !name.isBlank() && !company.isBlank() && !linkedin.isBlank() && consentAt != null;

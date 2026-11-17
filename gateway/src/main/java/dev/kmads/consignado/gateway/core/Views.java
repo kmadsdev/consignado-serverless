@@ -9,12 +9,13 @@ public final class Views {
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record Me(String id, String email, String name, String role, boolean profileComplete, String status,
-                     int windowsUsed, int windowsMax, String activeSessionId) {}
+                     int windowsUsed, int windowsMax, String activeSessionId, int windowMinutes) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record AdminUser(String id, String email, String name, String role, boolean profileComplete,
                             String status, int windowsUsed, int windowsMax, String activeSessionId, String company,
-                            String linkedin, String createdAt, String lastSeenAt, List<String> flags) {}
+                            String linkedin, String createdAt, String lastSeenAt, List<String> flags,
+                            int windowMinutes) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record Engine(String state, String since, int activeSessions, String pausedReason) {}
@@ -37,13 +38,13 @@ public final class Views {
 
     public static Me me(User u, Settings settings) {
         return new Me(u.id, u.email, u.name, role(u, settings), u.profileComplete(), u.status, u.windowsUsed,
-                u.windowsMax, u.activeSessionId);
+                u.windowsMax, u.activeSessionId, u.windowMinutes(settings));
     }
 
     public static AdminUser adminUser(User u, Settings settings) {
         return new AdminUser(u.id, u.email, u.name, role(u, settings), u.profileComplete(), u.status,
                 u.windowsUsed, u.windowsMax, u.activeSessionId, u.company, u.linkedin, Times.iso(u.createdAt),
-                Times.iso(u.lastSeenAt), List.copyOf(u.flags));
+                Times.iso(u.lastSeenAt), List.copyOf(u.flags), u.windowMinutes(settings));
     }
 
     public static SessionView session(Session s) {

@@ -73,8 +73,28 @@ public final class AdminService {
                 if (windows < 1 || windows > 20) throw ApiException.badRequest("Field windows must be 1 to 20");
                 user.windowsMax = Math.min(1000, user.windowsMax + windows);
             }
-            default -> throw ApiException.badRequest("Field action must be approve, hold, block, grant or delete");
+            case "set" -> {
+                Integer max = intField(body, "windowsMax", 0, 50);
+                Integer minutes = intField(body, "windowMinutes", 5, 60);
+                if (max == null && minutes == null) {
+                    throw ApiException.badRequest("Field windowsMax or windowMinutes is required");
+                }
+                if (max != null) user.windowsMax = max;
+                if (minutes != null) user.windowMinutes = minutes;
+            }
+            default -> throw ApiException.badRequest(
+                    "Field action must be approve, hold, block, grant, set or delete");
         }
+    }
+
+    /** null when the field is absent; 400 when it is not a whole number in [min, max]. */
+    private static Integer intField(JsonNode body, String name, int min, int max) {
+        JsonNode n = body.get(name);
+        if (n == null || n.isNull()) return null;
+        if (!n.isInt() || n.asInt() < min || n.asInt() > max) {
+            throw ApiException.badRequest("Field " + name + " must be a whole number from " + min + " to " + max);
+        }
+        return n.asInt();
     }
 
     /**
