@@ -109,6 +109,12 @@ cp "$HERE/host.json" "$PKG/host.json"
 mkdir -p "$PKG/proxy" "$PKG/config"
 cp "$HERE/proxy/function.json" "$PKG/proxy/function.json"
 cp "$HERE/config/application.properties" "$PKG/config/application.properties"
+# On Linux the containers write as root, so the runner user cannot chmod the files.
+# Take the files back first (Docker Desktop on macOS already maps them to the user).
+if [ "$(find "$PKG" -maxdepth 2 ! -user "$(id -u)" -print -quit)" != "" ]; then
+  if command -v sudo >/dev/null 2>&1; then sudo chown -R "$(id -u):$(id -g)" "$DIST"; else
+    docker run --rm -v "$DIST":/d debian:stable-slim chown -R "$(id -u):$(id -g)" /d; fi
+fi
 chmod -R u+rwX,go+rX "$PKG"
 chmod 755 "$PKG"/runtime/bin/* "$PKG"/runtime/lib/jspawnhelper 2>/dev/null || true
 JAVA_VERSION="$(tr -d '"' < "$PKG/java-version.txt")"; rm -f "$PKG/java-version.txt"
