@@ -1,0 +1,10 @@
+target/
+obj/
+bin/
+local.settings.json
+.idea/
+*.iml
+.vscode/
+.DS_Store
+.env
+.env.*
