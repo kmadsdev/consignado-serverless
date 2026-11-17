@@ -1,0 +1,7 @@
+dist/
+.cache/
+runtime/
+app/
+*.jar
+*.zip
+local.settings.json
