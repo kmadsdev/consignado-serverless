@@ -8,4 +8,6 @@ public interface UserStore {
     Optional<User> find(String id);
     void save(User user);
     List<User> list();
+    /** Removes the row. No error when it does not exist. */
+    void delete(String id);
 }
