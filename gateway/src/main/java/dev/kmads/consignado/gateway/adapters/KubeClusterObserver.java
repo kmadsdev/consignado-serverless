@@ -87,6 +87,23 @@ public final class KubeClusterObserver implements ClusterObserver {
         }
     }
 
+    /** Role "Azure Kubernetes Service RBAC Reader" allows apps/deployments/read and autoscaling/hpa/read. */
+    @Override
+    public java.util.Optional<ClusterView.Workload> workload() {
+        try {
+            String token = tokens.token(AzureTokens.AKS_SCOPE);
+            JsonNode deployments = get("/apis/apps/v1/namespaces/" + NAMESPACE + "/deployments", token);
+            if (deployments == null) return java.util.Optional.empty();
+            JsonNode hpas = get("/apis/autoscaling/v2/namespaces/" + NAMESPACE + "/horizontalpodautoscalers", token);
+            return java.util.Optional.of(new ClusterView.Workload(KubeParser.deployments(deployments),
+                    hpas == null ? List.of() : KubeParser.autoscalers(hpas)));
+        } catch (Exception e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            LOG.log(Level.WARNING, Logs.fmt("Kubernetes workload read failed: {0}", Logs.of(e)));
+            return java.util.Optional.empty();
+        }
+    }
+
     private JsonNode get(String path, String token) throws Exception {
         HttpRequest request = HttpRequest.newBuilder(URI.create(apiServerUrl + path))
                 .timeout(Duration.ofSeconds(10))

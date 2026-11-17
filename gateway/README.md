@@ -42,7 +42,7 @@ Errors are `{code, message}`. On an upstream failure the failed stage of the tra
 
 Required: `AZURE_CLIENT_ID`, `ENTRA_TENANT_ID`, `ENTRA_API_AUDIENCE`, `ADMIN_OID`, `AKS_RESOURCE_ID`, `AKS_API_SERVER_URL`, `AKS_CA_CERT_B64`, `AKS_INTERNAL_URL`, `APIFN_BASE_URL`, `KEY_VAULT_URL`, `STORAGE_ACCOUNT`, `OWNER_EMAIL`, `WINDOW_MINUTES`, `WINDOWS_MAX`, `COOLDOWN_MINUTES`, `BUDGET_LIMIT_USD`.
 
-Optional, status page (a missing id makes that service `unknown` with detail `not configured`): `GATEWAY_APP_ID`, `API_APP_ID`, `KEY_VAULT_ID`, `POSTGRES_ID` (full ARM resource ids; the cluster id is `AKS_RESOURCE_ID`).
+Optional, status page (a missing id makes that service `unknown` with detail `not configured`): `GATEWAY_APP_ID`, `API_APP_ID`, `KEY_VAULT_ID`, `POSTGRES_ID`, `APPINSIGHTS_ID` (without it: no `requests`, `errors`, `latency-avg`) (full ARM resource ids; the cluster id is `AKS_RESOURCE_ID`).
 
 Optional: `ACS_ENDPOINT` and `EMAIL_SENDER` (or `ACS_SENDER`) (email; without them the mailer writes only an audit row), `ALLOW_DEV_ORIGIN=true` (CORS for `http://localhost:5173`), `EDGE` (the edge key is required unless `EDGE=local`; a missing value or any other value keeps the check on), `DAILY_WINDOWS_MAX` (default 12), `ENTRA_SPA_CLIENT_ID` (when set, a token whose `azp` is another client application is refused), `TURNSTILE_HOSTNAMES` (comma list; default `consignado.kmads.dev,cluster.consignado.kmads.dev`).
 
@@ -56,7 +56,7 @@ Tables (made by Terraform): `users`, `sessions`, `engine`, `contacts`, `audit`. 
 
 ```bash
 cd gateway
-./mvnw -B -ntp verify     # compile, 131 tests (JUnit 5, no network), package
+./mvnw -B -ntp verify     # compile, 133 tests (JUnit 5, no network), package
 ls target/azure-functions/func-consignado-gw-km01   # the staged function app
 ```
 
@@ -87,13 +87,16 @@ Order: `functions`: edge, gateway, identity, keyvault, functions, database. `aks
 | database | ARM `properties.state`, metrics (`is_db_alive` for the state only) | Ready = up, Stopped = stopped, Starting/Updating = starting; `is_db_alive` 0 = down |
 | cluster | ARM power state (existing role) | Running = up, Starting = starting, else stopped |
 | load-balancer | the gateway's own `GET /actuator/health/readiness` to 10.10.3.200, metric `latency-avg` "now" | 200 = up, else down; not called when the cluster is not running |
-| node, pods | Kubernetes API (existing reader role), node metrics | all Ready = up, some = degraded, none = down; pods detail: ready count, restarts, image tag, age of the newest pod; no call when the cluster is not running |
+| node, pods | Kubernetes API (existing reader role: pods, endpoints, `apps/deployments`, `horizontalpodautoscalers`), node metrics | all Ready = up, some = degraded, none = down; pods detail: ready count, restarts, image tag, age of the newest pod, Deployment ready/desired replicas (fewer ready than desired = degraded), HPA current/desired (min to max); `replicas` = the Deployment's ready replicas, or the ready pods when the Deployment cannot be read; no call when the cluster is not running |
 
 Metric table (names checked with `az monitor metrics list-definitions` on 2026-11-17; the code table is `core/StatusMetrics.java`):
 
 | Service | Azure metric | Aggregation over 5 x 1 min | key | unit |
 |---|---|---|---|---|
-| gateway, functions | `OnDemandFunctionExecutionCount` | sum of Total | `requests` (function executions) | count |
+| gateway, functions | Application Insights `appi-consignado` (`APPINSIGHTS_ID`): `requests/count`, split `cloud/roleName` = app name | sum of Count | `requests` | count |
+| gateway, functions | `requests/failed`, same split (no series for a role = 0 failed) | sum of Count | `errors` | count |
+| gateway, functions | `requests/duration`, same split (only Average, Minimum, Maximum exist: no p95) | minute averages weighted by their counts | `latency-avg` | ms |
+| gateway, functions | `OnDemandFunctionExecutionCount` | sum of Total | `executions` | count |
 | gateway, functions | `InstanceCount` | mean of Average | `instances` | count |
 | gateway, functions | `CpuPercentage` | mean of Average | `cpu` | % |
 | gateway, functions | `MemoryWorkingSet` | mean of Average / 1 MiB | `memory` | MB |
@@ -106,7 +109,7 @@ Metric table (names checked with `az monitor metrics list-definitions` on 2026-1
 | node | `node_cpu_usage_percentage`, `node_memory_working_set_percentage` (on `aks-consignado`) | mean of Average | `cpu`, `memory` | % |
 | pods | Kubernetes (not Azure Monitor) | now | `replicas` (ready pods), `restarts` | count |
 
-Flex Consumption function apps expose no request count, HTTP 5xx or response time as platform metrics, so the status page shows none of those for them (no invented number). Error and latency per request come from the trace header. A metric without a data point in the window has `value: null`.
+The function apps themselves expose no request count, HTTP 5xx or response time as platform metrics; those three come from the Application Insights component (`APPINSIGHTS_ID`, one call for both apps). Without `APPINSIGHTS_ID` they are left out (no invented number). A metric without a data point in the window has `value: null`.
 
 Needs: role `Monitoring Reader` on `rg-consignado` for `id-consignado-gw`; resource provider `Microsoft.ResourceHealth` registered in the subscription (it was `NotRegistered` on 2026-11-17; until then the detail says "resource health: not readable").
 

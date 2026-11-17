@@ -106,7 +106,7 @@ public final class App {
                 new KubeClusterObserver(tokens, config.aksApiServerUrl(), config.aksCaCertB64()), upstream,
                 verifier::signingKeysFetchedAt,
                 new StatusService.Ids(config.gatewayAppId(), config.apiAppId(), config.keyVaultId(),
-                        config.postgresId(), config.aksResourceId()),
+                        config.postgresId(), config.aksResourceId(), config.appInsightsId()),
                 clock, statusPool);
         return new Handlers(verifier, users, engine,
                 proxy, contacts, admin, snapshot, secrets, hasher, audit, settings, config.allowDevOrigin(),

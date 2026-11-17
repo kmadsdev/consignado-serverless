@@ -10,6 +10,13 @@ public record ClusterView(boolean apiServerUp, List<Node> nodes, List<Pod> pods,
 
     public record Node(String name, boolean ready) {}
 
+    /** Deployments and autoscalers of the namespace (status page only). */
+    public record Workload(List<Deployment> deployments, List<Hpa> autoscalers) {}
+
+    public record Deployment(String name, int desired, int ready) {}
+
+    public record Hpa(String name, int current, int desired, int min, int max) {}
+
     public record Container(String name, String state, String reason, boolean imagePresent, int restarts,
                             String image) {
         public Container(String name, String state, String reason, boolean imagePresent) {

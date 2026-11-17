@@ -48,6 +48,35 @@ class StatusServiceTest {
         m.resources.put(World.IDS.postgres(), json("{\"location\":\"NorthCentralUS\",\"properties\":{\"state\":\"Ready\"}}"));
         m.resources.put(World.IDS.aks(), json("{\"location\":\"belgiumcentral\"}"));
         m.health.put(World.IDS.apiApp(), json("{\"properties\":{\"availabilityState\":\"Available\"}}"));
+        m.metrics.put(World.IDS.appInsights(), fixture("app-insights-requests"));
+    }
+
+    // ------------------------------------------------- Application Insights
+
+    @Test
+    void requestMetricsOfRealAnswerPerRole() {
+        JsonNode appi = fixture("app-insights-requests");
+        List<Views.Metric> gw = StatusMetrics.requestMetrics(appi, "func-consignado-gw-km01");
+        assertEquals(List.of("requests", "errors", "latency-avg"), gw.stream().map(Views.Metric::key).toList());
+        assertEquals(192.0, gw.get(0).value());
+        assertEquals(0.0, gw.get(1).value(), "requests/failed has no series for a role without failures: 0");
+        assertEquals(81.9, gw.get(2).value(), "weighted by the count of each minute");
+        assertEquals("ms", gw.get(2).unit());
+        List<Views.Metric> api = StatusMetrics.requestMetrics(appi, "func-consignado-api-km01");
+        assertEquals(0.0, api.get(0).value());
+        assertNull(api.get(2).value(), "no request: no duration");
+        List<Views.Metric> other = StatusMetrics.requestMetrics(appi, "unknown-app");
+        assertNull(other.get(0).value());
+    }
+
+    @Test
+    void failedRequestsAreCountedPerRole() {
+        JsonNode answer = json("{\"value\":[{\"name\":{\"value\":\"requests/failed\"},\"timeseries\":["
+                + "{\"metadatavalues\":[{\"name\":{\"value\":\"cloud/rolename\"},\"value\":\"func-consignado-api-km01\"}],"
+                + "\"data\":[{\"count\":2},{\"count\":1},{}]}]}]}");
+        assertEquals(3.0, StatusMetrics.requestMetrics(answer, "func-consignado-api-km01").get(1).value());
+        assertNull(StatusMetrics.requestMetrics(json("{\"value\":[]}"), "func-consignado-api-km01").get(1).value(),
+                "metric not in the answer: no data");
     }
 
     private GatewayResponse get(String query, String token) {
@@ -82,7 +111,7 @@ class StatusServiceTest {
         assertEquals(0.0, StatusMetrics.reduce(fn, "OnDemandFunctionExecutionCount", StatusMetrics.Agg.TOTAL));
         assertEquals(1.0, StatusMetrics.reduce(fn, "InstanceCount", StatusMetrics.Agg.AVERAGE));
         List<Views.Metric> fm = StatusMetrics.metrics("functions", fn);
-        assertEquals(List.of("requests", "instances", "cpu", "memory"), fm.stream().map(Views.Metric::key).toList());
+        assertEquals(List.of("executions", "instances", "cpu", "memory"), fm.stream().map(Views.Metric::key).toList());
         assertEquals(123.0, fm.get(3).value(), "bytes -> MB");
         assertEquals("MB", fm.get(3).unit());
 
@@ -131,6 +160,10 @@ class StatusServiceTest {
         assertEquals("up", fn.get("state").asText());
         assertEquals("State Running; resource health: Available", fn.get("detail").asText());
         assertEquals(1.0, metric(fn, "instances"));
+        assertEquals(0.0, metric(fn, "requests"));
+        assertEquals(192.0, metric(service(s, "gateway"), "requests"));
+        assertEquals(0.0, metric(service(s, "gateway"), "errors"));
+        assertEquals(81.9, metric(service(s, "gateway"), "latency-avg"));
         assertEquals(List.of("azure-monitor", "resource-health", "arm"),
                 Json.MAPPER.convertValue(fn.get("source"), List.class));
         JsonNode db = service(s, "database");
@@ -257,6 +290,18 @@ class StatusServiceTest {
         assertEquals("up", pods.get("state").asText());
         assertTrue(pods.get("detail").asText().startsWith("1 of 1 pods Ready, 0 restarts"), pods.toString());
         assertEquals(1.0, metric(pods, "replicas"));
+        assertFalse(pods.get("detail").asText().contains("Deployment"), "no workload read: from the pod list");
+
+        w.clock.plus(Duration.ofSeconds(15));
+        w.cluster.workload = java.util.Optional.of(new ClusterView.Workload(
+                List.of(new ClusterView.Deployment("consignado-api", 2, 1)),
+                List.of(new ClusterView.Hpa("consignado-api", 1, 2, 1, 3))));
+        pods = service(World.json(get("host=aks", "good-u1")), "pods");
+        assertEquals("degraded", pods.get("state").asText());
+        assertEquals(1.0, metric(pods, "replicas"));
+        assertTrue(pods.get("detail").asText().endsWith(
+                "; Deployment consignado-api: 1 of 2 replicas ready; HPA consignado-api: current 1, desired 2 (1 to 3)"),
+                pods.get("detail").asText());
 
         w.clock.plus(Duration.ofSeconds(15));
         w.upstream.readiness = 503;

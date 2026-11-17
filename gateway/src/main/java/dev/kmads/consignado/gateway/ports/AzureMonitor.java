@@ -12,6 +12,12 @@ public interface AzureMonitor {
     /** Platform metrics, last 5 minutes, interval 1 minute, aggregations Average, Total and Maximum. */
     Optional<JsonNode> metrics(String resourceId, List<String> metricNames);
 
+    /**
+     * Application Insights component metrics requests/count, requests/failed, requests/duration, last 5 minutes,
+     * split by dimension cloud/roleName (one series per function app).
+     */
+    Optional<JsonNode> requestMetrics(String appInsightsId);
+
     /** Resource health: Microsoft.ResourceHealth/availabilityStatuses/current. */
     Optional<JsonNode> health(String resourceId);
 
