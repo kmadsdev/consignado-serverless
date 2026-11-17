@@ -1,5 +1,6 @@
 package dev.kmads.consignado.gateway.http;
 
+import dev.kmads.consignado.gateway.core.Logs;
 import com.fasterxml.jackson.databind.JsonNode;
 import dev.kmads.consignado.gateway.core.AdminService;
 import dev.kmads.consignado.gateway.core.ApiException;
@@ -224,12 +225,12 @@ public final class Handlers {
         try {
             engine.tick();
         } catch (RuntimeException e) {
-            LOG.log(Level.WARNING, "reaper: engine tick failed: {0}", e.getClass().getSimpleName());
+            LOG.log(Level.WARNING, Logs.fmt("reaper: engine tick failed: {0}", Logs.of(e)));
         }
         try {
             snapshot.refreshIfDue();
         } catch (RuntimeException e) {
-            LOG.log(Level.WARNING, "reaper: snapshot refresh failed: {0}", e.getClass().getSimpleName());
+            LOG.log(Level.WARNING, Logs.fmt("reaper: snapshot refresh failed: {0}", Logs.of(e)));
         }
     }
 
@@ -290,8 +291,8 @@ public final class Handlers {
                     response.headers().put("Retry-After", String.valueOf(e.retryAfterSeconds()));
                 }
             } catch (RuntimeException e) {
-                // Only the class name goes to the log: a message can hold a host name or a value.
-                LOG.log(Level.SEVERE, "request failed: {0}", e.getClass().getName());
+                // The log gets the class and the message. The response gets neither.
+                LOG.log(Level.SEVERE, Logs.fmt("request failed: {0}", Logs.of(e)));
                 response = GatewayResponse.json(500, new Views.ErrorBody("internal", "Internal error"));
             }
         }
@@ -320,7 +321,7 @@ public final class Handlers {
             Claims claims = verifier.verify(header.substring(7).strip());
             return new Caller(claims, ms(t));
         } catch (AuthException e) {
-            LOG.log(Level.INFO, "token refused: {0}", e.getMessage());
+            LOG.log(Level.INFO, Logs.fmt("token refused: {0}", e.getMessage()));
             throw invalidToken();
         }
     }

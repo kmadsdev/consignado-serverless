@@ -21,8 +21,8 @@ public final class ProxyService {
 
     private static final Set<String> METHODS = Set.of("GET", "POST", "PATCH");
     /** Only these request headers go upstream. Authorization, cookies and hop-by-hop headers never do. */
-    static final List<String> FORWARDED = List.of("accept", "accept-language", "content-type", "if-none-match",
-            "x-request-id");
+    static final List<String> FORWARDED = List.of("accept", "accept-language", "content-type", "idempotency-key",
+            "if-none-match", "x-request-id");
     private static final Pattern PATH = Pattern.compile("^[A-Za-z0-9/_\\-.~]{1,512}$");
     private static final Pattern QUERY = Pattern.compile("^[A-Za-z0-9_\\-.~%&=+,:@/]{0,1024}$");
 

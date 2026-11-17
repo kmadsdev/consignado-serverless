@@ -18,7 +18,7 @@ Plain Java: no Spring, no dependency injection framework. All objects are built 
 
 | Method and path | Who | Result |
 |---|---|---|
-| `GET /api/health` | all | `{status:"UP"}` |
+| `GET /api/health` | all | `{status:"UP"}`, a constant: no configuration, no Azure call, no edge key |
 | `GET /api/engine` | all | `Engine` |
 | `GET /api/snapshot` | all | masked copy of shared data `{asOf, agreements, customers, contracts}` |
 | `POST /api/contact` | all + Turnstile token | `ContactRequest` (201), email to the owner |
@@ -40,11 +40,11 @@ Errors are `{code, message}`. The proxy returns the status and the JSON of the A
 
 Required: `AZURE_CLIENT_ID`, `ENTRA_TENANT_ID`, `ENTRA_API_AUDIENCE`, `ADMIN_OID`, `AKS_RESOURCE_ID`, `AKS_API_SERVER_URL`, `AKS_CA_CERT_B64`, `AKS_INTERNAL_URL`, `APIFN_BASE_URL`, `KEY_VAULT_URL`, `STORAGE_ACCOUNT`, `OWNER_EMAIL`, `WINDOW_MINUTES`, `WINDOWS_MAX`, `COOLDOWN_MINUTES`, `BUDGET_LIMIT_USD`.
 
-Optional: `ACS_ENDPOINT` and `ACS_SENDER` (email; without them the mailer writes only an audit row), `ALLOW_DEV_ORIGIN=true` (CORS for `http://localhost:5173`), `EDGE=cloudflare` (the edge key becomes mandatory).
+Optional: `ACS_ENDPOINT` and `EMAIL_SENDER` (or `ACS_SENDER`) (email; without them the mailer writes only an audit row), `ALLOW_DEV_ORIGIN=true` (CORS for `http://localhost:5173`), `EDGE=cloudflare` (the edge key becomes mandatory).
 
 A missing or wrong variable stops the app at the first request. The log shows the name of the variable and never a value.
 
-Key Vault secrets (names): `apifn-host-key` (function key of the API host), `edge-key` (shared with the Cloudflare Worker), `turnstile-secret` (optional), `hash-key` (made by the gateway when it does not exist).
+Key Vault secrets (names): `apifn-host-key` (function key of the API host), `edge-key` (shared with the Cloudflare Worker), `turnstile-secret` (optional), `hash-key` (made by Terraform; the gateway only reads Key Vault and fails with a clear log line when it is missing).
 
 Tables (made by Terraform): `users`, `sessions`, `engine`, `contacts`, `audit`. Blob: container `data`, blob `snapshot.json`.
 
@@ -78,7 +78,7 @@ A JDK 21 or newer is necessary. The tests run the real core and the real handler
 | The client IP comes only from `CF-Connecting-IP`, and only after the edge key matched. | A client cannot forge its address. | Without the edge (local runs) there is no IP. |
 | IP and fingerprint are stored only as HMAC-SHA256 with a Key Vault key. | A leak of the table does not show addresses. | The duplicate check sees only exact matches. A new browser or a VPN passes it. It is a filter, not a proof. |
 | Same device holds the account; same IP only sets a flag. | An office or a university shares one IP. | The owner must approve held accounts by hand. |
-| The proxy forwards only `api/v1/` paths, methods GET, POST and PATCH, bodies up to 64 KB, and five request headers (`accept`, `accept-language`, `content-type`, `if-none-match`, `x-request-id`). `Authorization`, cookies and hop-by-hop headers never go upstream. | An allow-list is safer than a block-list. | A new header that the API needs must be added here. |
+| The proxy forwards only `api/v1/` paths, methods GET, POST and PATCH, bodies up to 64 KB, and six request headers (`accept`, `accept-language`, `content-type`, `idempotency-key`, `if-none-match`, `x-request-id`). `Authorization`, cookies and hop-by-hop headers never go upstream. | An allow-list is safer than a block-list. | A new header that the API needs must be added here. |
 | A guest can call one route: `POST api/v1/simulations/preview` on the Functions host. | It has no database call. | None. |
 | Errors are generic `{code, message}`. The log holds exception class names, not messages. | A message can hold a host name or a value. | Debugging needs Application Insights and the class name. |
 | Secrets are cached 5 minutes in memory. | Fewer Key Vault calls, and the trace shows `cached`. | A rotated secret is used after 5 minutes at most. |

@@ -1,5 +1,6 @@
 package dev.kmads.consignado.gateway.adapters;
 
+import dev.kmads.consignado.gateway.core.Logs;
 import com.azure.communication.email.EmailClient;
 import com.azure.communication.email.EmailClientBuilder;
 import com.azure.communication.email.models.EmailMessage;
@@ -31,7 +32,7 @@ public final class Mailers {
                 client.beginSend(message);
                 audit.record("gateway", "mail.sent", subject, null);
             } catch (RuntimeException e) {
-                LOG.log(Level.WARNING, "mail send failed: {0}", e.getClass().getSimpleName());
+                LOG.log(Level.WARNING, Logs.fmt("mail send failed: {0}", e.getClass().getSimpleName()));
                 audit.record("gateway", "mail.failed", subject, null);
             }
         };

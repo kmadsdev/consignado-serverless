@@ -136,11 +136,15 @@ class SmallRulesTest {
     @Test
     void hashIsStableKeyedAndNeverTheRawValue() {
         World.Vault vault = new World.Vault();
+        vault.values.put("hash-key", "key-one");
         Hasher hasher = new Hasher(vault);
         String h = hasher.hash("203.0.113.1");
         assertEquals(h, hasher.hash("203.0.113.1"));
         assertNotEquals(h, hasher.hash("203.0.113.2"));
-        assertNotEquals(h, new Hasher(new World.Vault()).hash("203.0.113.1"), "another key gives another hash");
+        World.Vault other = new World.Vault();
+        other.values.put("hash-key", "key-two");
+        assertNotEquals(h, new Hasher(other).hash("203.0.113.1"), "another key gives another hash");
+        assertThrows(IllegalStateException.class, () -> new Hasher(new World.Vault()).hash("203.0.113.1"));
         assertEquals(h, new Hasher(vault).hash("203.0.113.1"));
         assertNull(hasher.hash(null));
     }
@@ -195,7 +199,10 @@ class SmallRulesTest {
         assertThrows(IllegalStateException.class, () -> Config.load(http::get));
         Map<String, String> acs = env();
         acs.put("ACS_ENDPOINT", "https://acs.example");
-        assertEquals("Missing environment variable: ACS_SENDER",
-                assertThrows(IllegalStateException.class, () -> Config.load(acs::get)).getMessage());
+        assertNull(Config.load(acs::get).acsSender(), "no sender: the mailer writes audit rows only");
+        acs.put("EMAIL_SENDER", "DoNotReply@example.com");
+        assertEquals("DoNotReply@example.com", Config.load(acs::get).acsSender());
+        assertEquals("request failed: java.lang.IllegalStateException: Missing environment variable: X",
+                Logs.fmt("request failed: {0}", Logs.of(new IllegalStateException("Missing environment variable: X"))));
     }
 }

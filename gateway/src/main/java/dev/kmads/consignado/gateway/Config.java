@@ -42,18 +42,23 @@ public record Config(
                 number(env, "COOLDOWN_MINUTES", 0, 240),
                 decimal(env, "BUDGET_LIMIT_USD"),
                 optional(env, "ACS_ENDPOINT"),
-                optional(env, "ACS_SENDER"),
+                sender(env),
                 "true".equalsIgnoreCase(optional(env, "ALLOW_DEV_ORIGIN")),
                 "cloudflare".equals(optional(env, "EDGE")));
         if (!AKS_ID.matcher(c.aksResourceId).matches()) throw invalid("AKS_RESOURCE_ID");
         if (!STORAGE.matcher(c.storageAccount).matches()) throw invalid("STORAGE_ACCOUNT");
-        if (c.acsEndpoint != null && c.acsSender == null) throw missing("ACS_SENDER");
         return c;
     }
 
     public Settings settings() {
         return new Settings(adminOid, Duration.ofMinutes(windowMinutes), windowsMax,
                 Duration.ofMinutes(cooldownMinutes), budgetLimitUsd, Duration.ofMinutes(15), Duration.ofMinutes(20));
+    }
+
+    /** The sender address: EMAIL_SENDER (the name that Terraform sets) or ACS_SENDER. */
+    private static String sender(Function<String, String> env) {
+        String v = optional(env, "EMAIL_SENDER");
+        return v != null ? v : optional(env, "ACS_SENDER");
     }
 
     private static String optional(Function<String, String> env, String name) {

@@ -1,5 +1,6 @@
 package dev.kmads.consignado.gateway.functions;
 
+import dev.kmads.consignado.gateway.core.Logs;
 import com.microsoft.azure.functions.ExecutionContext;
 import com.microsoft.azure.functions.annotation.FunctionName;
 import com.microsoft.azure.functions.annotation.TimerTrigger;
@@ -15,8 +16,7 @@ public class ReaperFunction {
         try {
             App.handlers().reaper();
         } catch (RuntimeException e) {
-            context.getLogger().log(Level.SEVERE, "reaper failed: {0}",
-                    e instanceof IllegalStateException ? e.getMessage() : e.getClass().getName());
+            context.getLogger().log(Level.SEVERE, Logs.fmt("reaper failed: {0}", Logs.of(e)));
         }
     }
 }

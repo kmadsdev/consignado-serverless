@@ -109,6 +109,28 @@ class ProxyRoutesTest {
     }
 
     @Test
+    void idempotencyKeyGoesToBothApiHosts() {
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Authorization", "Bearer good-u1");
+        headers.put("Idempotency-Key", "7f3c2a10-1111-4222-8333-444455556666");
+        headers.put("Content-Type", "application/json");
+        byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
+        w.handlers.proxy(HostKind.FUNCTIONS, GatewayRequest.of("POST", "api/v1/contracts", null, headers, body));
+        assertEquals("7f3c2a10-1111-4222-8333-444455556666", w.upstream.last().headers().get("idempotency-key"));
+
+        w.signUp("u1", "203.0.113.1", "fingerprint-u1");
+        w.createSession("u1");
+        w.makeReady();
+        w.handlers.proxy(HostKind.AKS, GatewayRequest.of("POST", "api/v1/contracts", null, headers, body));
+        assertEquals(HostKind.AKS, w.upstream.last().host());
+        assertEquals("7f3c2a10-1111-4222-8333-444455556666", w.upstream.last().headers().get("idempotency-key"));
+
+        headers.put("Idempotency-Key", "bad\r\nX-Injected: 1");
+        w.handlers.proxy(HostKind.FUNCTIONS, GatewayRequest.of("POST", "api/v1/contracts", null, headers, body));
+        assertFalse(w.upstream.last().headers().containsKey("idempotency-key"), "a value with a line break is dropped");
+    }
+
+    @Test
     void upstreamStatusAndBodyComeBackUnchangedWithTheTwoHeaders() throws Exception {
         w.upstream.status = 422;
         w.upstream.body = "{\"code\":\"margin-exceeded\",\"fullName\":\"Maria Example\"}".getBytes(StandardCharsets.UTF_8);

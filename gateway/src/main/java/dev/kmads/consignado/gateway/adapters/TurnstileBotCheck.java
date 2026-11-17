@@ -1,5 +1,6 @@
 package dev.kmads.consignado.gateway.adapters;
 
+import dev.kmads.consignado.gateway.core.Logs;
 import dev.kmads.consignado.gateway.core.Json;
 import dev.kmads.consignado.gateway.ports.BotCheck;
 import dev.kmads.consignado.gateway.ports.Secrets;
@@ -48,7 +49,7 @@ public final class TurnstileBotCheck implements BotCheck {
             return response.statusCode() == 200 && Json.MAPPER.readTree(response.body()).path("success").asBoolean(false);
         } catch (Exception e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
-            LOG.log(Level.WARNING, "bot check call failed: {0}", e.getClass().getSimpleName());
+            LOG.log(Level.WARNING, Logs.fmt("bot check call failed: {0}", e.getClass().getSimpleName()));
             return false;
         }
     }

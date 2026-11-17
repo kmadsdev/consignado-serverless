@@ -1,5 +1,6 @@
 package dev.kmads.consignado.gateway.adapters;
 
+import dev.kmads.consignado.gateway.core.Logs;
 import com.fasterxml.jackson.databind.JsonNode;
 import dev.kmads.consignado.gateway.core.Json;
 import dev.kmads.consignado.gateway.ports.CostReader;
@@ -48,7 +49,7 @@ public final class CostManagementReader implements CostReader {
             nextTry = now.plus(TTL);
         } catch (Exception e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
-            LOG.log(Level.WARNING, "cost query failed: {0}", e.getClass().getSimpleName());
+            LOG.log(Level.WARNING, Logs.fmt("cost query failed: {0}", e.getClass().getSimpleName()));
             nextTry = now.plus(FAILURE_TTL);
         }
         return Optional.ofNullable(cached);

@@ -54,7 +54,15 @@ class UserRoutesTest {
         User row = w.users.rows.get("u1");
         assertEquals(64, row.ipHash.length(), "the IP is stored as an HMAC-SHA256 hex value");
         assertFalse(row.ipHash.contains("203.0.113.1"));
-        assertEquals(1, w.vault.creates, "hash-key is created once when it does not exist");
+    }
+
+    @Test
+    void missingHashKeyFailsAndStoresNothing() {
+        w.vault.values.remove("hash-key");
+        GatewayResponse r = w.handlers.me(World.req("GET", null, "good-u1", "203.0.113.1", null));
+        assertEquals(500, r.status());
+        assertEquals("internal", World.json(r).get("code").asText());
+        assertTrue(w.users.rows.isEmpty(), "no user row without a hashed IP");
     }
 
     @Test
