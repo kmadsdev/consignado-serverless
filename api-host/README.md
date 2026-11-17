@@ -84,7 +84,7 @@ Sources: [custom handlers](https://learn.microsoft.com/azure/azure-functions/fun
 | Keys | `x-functions-key` header or `code` query parameter; any host key works | 401 without a key. The header also reaches the API, which ignores it |
 | Limits | An HTTP function must answer in 230 s (load balancer) | `functionTimeout` is 2 minutes |
 | "Not a reverse proxy" | Microsoft warns: "Azure Functions isn't a standard reverse proxy. Some components of the HTTP request, such as certain headers and routes, might be restricted", and names Container Apps or App Service for web apps | The `Host` header was kept (the `Location` of a 201 shows the caller's host). No header problem seen for this JSON API |
-| Deployment | Flex Consumption: `az functionapp deployment source config-zip --src <zip> --name <app> --resource-group <rg>`; the zip goes to the deployment blob container. No remote build for a ready package The workflow `api-host.yml` deploys this way. Live since 2026-11-17 |
+| Deployment | Flex Consumption: `az functionapp deployment source config-zip --src <zip> --name <app> --resource-group <rg>`; the zip goes to the deployment blob container. No remote build for a ready package. The workflow `api-host.yml` deploys this way. On 2026-11-17 both runs of the workflow ended with the deploy step marked failed: the zip was accepted, then the step could not fetch the host key (host storage fault, fixed later in Terraform). The host has served live calls since that day. A fully green run is not on record at the time of writing. |
 
 ## Measured (2026-11-17)
 
