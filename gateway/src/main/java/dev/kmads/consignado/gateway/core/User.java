@@ -27,6 +27,10 @@ public final class User {
     /** The admin approved this account after a hold: the duplicate check does not hold it again. */
     public boolean approvedByAdmin;
     public String activeSessionId;
+    /** HMAC of the normalised mailbox (Validate.mailbox): the duplicate check across accounts. */
+    public String mailboxHash;
+    /** Storage version for optimistic concurrency. Null for a new row. */
+    public String etag;
 
     public boolean profileComplete() {
         return !name.isBlank() && !company.isBlank() && !linkedin.isBlank() && consentAt != null;

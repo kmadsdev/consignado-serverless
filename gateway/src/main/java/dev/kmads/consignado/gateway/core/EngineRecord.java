@@ -22,4 +22,6 @@ public final class EngineRecord {
     public Instant lastSnapshotAt;
     /** The last run of the daily retention job. */
     public Instant lastRetentionAt;
+    /** The last cost check of the timer's budget guard. */
+    public Instant lastBudgetCheckAt;
 }

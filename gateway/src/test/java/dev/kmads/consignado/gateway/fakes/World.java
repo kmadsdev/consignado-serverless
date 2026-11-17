@@ -28,11 +28,33 @@ public final class World {
         @Override public Instant instant() { return now; }
     }
 
+    /** Users with copies and ETags, like the table: a stale write gets ConflictException. */
     public static final class Users implements UserStore {
         public final Map<String, User> rows = new LinkedHashMap<>();
-        @Override public Optional<User> find(String id) { return Optional.ofNullable(rows.get(id)); }
-        @Override public void save(User user) { rows.put(user.id, user); }
-        @Override public List<User> list() { return new ArrayList<>(rows.values()); }
+        private int version;
+        /** Runs before each save: a test can make another writer change the row first. */
+        public Runnable beforeSave = () -> { };
+        public static User copy(User u) {
+            User c = new User();
+            c.id = u.id; c.email = u.email; c.name = u.name; c.company = u.company; c.linkedin = u.linkedin;
+            c.status = u.status; c.windowsUsed = u.windowsUsed; c.windowsMax = u.windowsMax;
+            c.flags = new TreeSet<>(u.flags); c.ipHash = u.ipHash; c.fingerprintHash = u.fingerprintHash;
+            c.createdAt = u.createdAt; c.lastSeenAt = u.lastSeenAt; c.consentAt = u.consentAt;
+            c.approvedByAdmin = u.approvedByAdmin; c.activeSessionId = u.activeSessionId;
+            c.mailboxHash = u.mailboxHash; c.etag = u.etag;
+            return c;
+        }
+        @Override public Optional<User> find(String id) { return Optional.ofNullable(rows.get(id)).map(Users::copy); }
+        @Override public void save(User user) {
+            Runnable hook = beforeSave;
+            beforeSave = () -> { };
+            hook.run();
+            User stored = rows.get(user.id);
+            if (user.etag != null && stored != null && !user.etag.equals(stored.etag)) throw new ConflictException();
+            user.etag = "u" + (++version);
+            rows.put(user.id, copy(user));
+        }
+        @Override public List<User> list() { return rows.values().stream().map(Users::copy).toList(); }
         @Override public void delete(String id) { rows.remove(id); }
     }
 
@@ -98,7 +120,12 @@ public final class World {
     public static final class Vault implements Secrets {
         public final Map<String, String> values = new HashMap<>();
         private final Set<String> seen = new HashSet<>();
-        @Override public Read read(String name) { return new Read(values.get(name), !seen.add(name)); }
+        /** Key Vault does not answer. */
+        public boolean down;
+        @Override public Read read(String name) {
+            if (down) throw new IllegalStateException("Key Vault down");
+            return new Read(values.get(name), !seen.add(name));
+        }
     }
 
     public final TestClock clock = new TestClock();
@@ -156,6 +183,7 @@ public final class World {
                 c.pausedReason = engineRow.pausedReason; c.lastStopAt = engineRow.lastStopAt;
                 c.activeSessions = engineRow.activeSessions; c.externalSince = engineRow.externalSince;
                 c.lastSnapshotAt = engineRow.lastSnapshotAt; c.lastRetentionAt = engineRow.lastRetentionAt;
+                c.lastBudgetCheckAt = engineRow.lastBudgetCheckAt;
                 return c;
             }
             @Override public void save(EngineRecord record) { engineRow = record; }
