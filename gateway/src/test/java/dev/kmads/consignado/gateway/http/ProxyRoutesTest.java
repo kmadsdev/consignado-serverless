@@ -147,15 +147,15 @@ class ProxyRoutesTest {
 
     @Test
     void traceHasMeasuredTimesAndMarksAColdCall() throws Exception {
-        w.upstream.onCall = () -> w.nanos += 4_200_000_000L;
+        w.upstream.onCall = () -> w.nanos += 9_200_000_000L;
         GatewayResponse r = fn("POST", "api/v1/simulations/preview", null, "{}");
         JsonNode t = trace(r);
         assertTrue(t.get("cold").asBoolean());
-        assertEquals(4200, t.get("totalMs").asLong());
+        assertEquals(9200, t.get("totalMs").asLong());
         assertEquals(List.of("request", "edge", "gateway", "identity", "keyvault", "function-cold-start", "jvm-start",
                 "response"), stages(t), "a guest never reaches the database stage");
         JsonNode cold = t.get("events").get(5);
-        assertEquals(4200, cold.get("ms").asLong());
+        assertEquals(9200, cold.get("ms").asLong());
         assertEquals("done", cold.get("status").asText());
         assertFalse(t.get("events").get(6).has("ms"));
         assertEquals(0, t.get("events").get(3).get("ms").asLong());
@@ -170,6 +170,31 @@ class ProxyRoutesTest {
         assertEquals("response", response.get("stage").asText());
         assertEquals(120, response.get("ms").asLong());
         for (JsonNode e : t.get("events")) assertTrue(e.has("ts") && e.has("stage") && e.has("status"));
+    }
+
+    @Test
+    void aSlowCallIsNotAColdStartAndTheAksHostIsNeverCold() throws Exception {
+        w.upstream.onCall = () -> w.nanos += 4_800_000_000L;
+        JsonNode slow = trace(fn("POST", "api/v1/contracts/abc/activate", "good-u1", "{}"));
+        assertFalse(slow.get("cold").asBoolean(), "4.8 s is a slow call, not a cold start");
+        assertFalse(stages(slow).contains("function-cold-start") || stages(slow).contains("jvm-start"));
+        JsonNode last = slow.get("events").get(slow.get("events").size() - 1);
+        assertEquals(4800, last.get("ms").asLong());
+
+        w.upstream.onCall = () -> w.nanos += 8_000_000_000L;
+        assertFalse(trace(fn("GET", "api/v1/customers", "good-u1", null)).get("cold").asBoolean(), "exactly 8 s is not cold");
+
+        w.signUp("u1", "203.0.113.1", "fingerprint-u1");
+        w.createSession("u1");
+        w.upstream.onCall = () -> { };
+        w.makeReady();
+        w.upstream.onCall = () -> w.nanos += 9_500_000_000L;
+        JsonNode aksTrace = trace(aks("GET", "api/v1/customers", "good-u1"));
+        assertFalse(aksTrace.get("cold").asBoolean(), "the AKS host never reports cold");
+        assertFalse(stages(aksTrace).contains("function-cold-start"));
+        JsonNode aksLast = aksTrace.get("events").get(aksTrace.get("events").size() - 1);
+        assertEquals("response", aksLast.get("stage").asText());
+        assertEquals(9500, aksLast.get("ms").asLong());
     }
 
     @Test
