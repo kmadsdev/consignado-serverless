@@ -93,6 +93,14 @@ public class HttpFunctions {
         return call(req, id, context, Handlers::sessionsGet);
     }
 
+    @FunctionName("sessionsEnd")
+    public HttpResponseMessage sessionsEnd(
+            @HttpTrigger(name = "req", methods = {HttpMethod.POST, HttpMethod.OPTIONS}, route = "sessions/{id}/end",
+                    authLevel = AuthorizationLevel.ANONYMOUS) HttpRequestMessage<Optional<String>> req,
+            @BindingName("id") String id, ExecutionContext context) {
+        return call(req, id, context, Handlers::sessionsEnd);
+    }
+
     @FunctionName("proxyFunctions")
     public HttpResponseMessage proxyFunctions(
             @HttpTrigger(name = "req", methods = {HttpMethod.GET, HttpMethod.POST, HttpMethod.PATCH, HttpMethod.PUT,

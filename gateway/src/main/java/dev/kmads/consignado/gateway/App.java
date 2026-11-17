@@ -19,12 +19,15 @@ import dev.kmads.consignado.gateway.core.EngineService;
 import dev.kmads.consignado.gateway.core.Hasher;
 import dev.kmads.consignado.gateway.core.ProxyService;
 import dev.kmads.consignado.gateway.core.RateGuard;
+import dev.kmads.consignado.gateway.core.RetentionService;
+import dev.kmads.consignado.gateway.core.UserErasure;
 import dev.kmads.consignado.gateway.core.Settings;
 import dev.kmads.consignado.gateway.core.SnapshotService;
 import dev.kmads.consignado.gateway.core.UserService;
 import dev.kmads.consignado.gateway.http.Handlers;
 import dev.kmads.consignado.gateway.ports.AuditLog;
 import dev.kmads.consignado.gateway.ports.BotCheck;
+import dev.kmads.consignado.gateway.ports.ContactStore;
 import dev.kmads.consignado.gateway.ports.EngineStore;
 import dev.kmads.consignado.gateway.ports.Mailer;
 import dev.kmads.consignado.gateway.ports.Secrets;
@@ -64,6 +67,7 @@ public final class App {
         SessionStore sessionStore = tables.sessions();
         EngineStore engineStore = tables.engine();
         AuditLog audit = tables.audit();
+        ContactStore contactStore = tables.contacts();
 
         Secrets secrets = new KeyVaultSecrets(config.keyVaultUrl(), credential);
         Hasher hasher = new Hasher(secrets);
@@ -79,16 +83,19 @@ public final class App {
                 new KubeClusterObserver(tokens, config.aksApiServerUrl(), config.aksCaCertB64()),
                 upstream, audit, settings, clock, ids);
         ProxyService proxy = new ProxyService(upstream, secrets, sessionStore, clock, System::nanoTime);
-        ContactService contacts = new ContactService(tables.contacts(), mailer, botCheck, hasher, audit, clock, ids);
+        ContactService contacts = new ContactService(contactStore, mailer, botCheck, hasher, audit, clock, ids);
+        UserErasure erasure = new UserErasure(userStore, sessionStore, contactStore);
         AdminService admin = new AdminService(userStore, engine,
-                new CostManagementReader(tokens, config.aksResourceId()), audit, settings, clock);
+                new CostManagementReader(tokens, config.aksResourceId()), audit, settings, clock, erasure, hasher);
+        RetentionService retention = new RetentionService(userStore, sessionStore, erasure, tables.auditRetention(),
+                audit, engineStore, hasher, settings, clock);
         SnapshotService snapshot = new SnapshotService(upstream, secrets,
                 new BlobSnapshotStore(tokens, config.storageAccount()), engineStore, clock);
 
         return new Handlers(EntraTokenVerifier.forTenant(config.tenantId(), config.apiAudience()), users, engine,
                 proxy, contacts, admin, snapshot, secrets, hasher, audit, settings, config.allowDevOrigin(),
                 System::nanoTime, new RateGuard(5, Duration.ofMinutes(10), clock),
-                new RateGuard(3, Duration.ofMinutes(10), clock), config.edgeCloudflare());
+                new RateGuard(3, Duration.ofMinutes(10), clock), config.edgeCloudflare(), retention);
     }
 
     private static final SecureRandom RANDOM = new SecureRandom();

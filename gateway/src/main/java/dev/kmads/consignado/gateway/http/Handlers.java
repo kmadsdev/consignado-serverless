@@ -13,6 +13,7 @@ import dev.kmads.consignado.gateway.core.HostKind;
 import dev.kmads.consignado.gateway.core.Json;
 import dev.kmads.consignado.gateway.core.ProxyService;
 import dev.kmads.consignado.gateway.core.RateGuard;
+import dev.kmads.consignado.gateway.core.RetentionService;
 import dev.kmads.consignado.gateway.core.Session;
 import dev.kmads.consignado.gateway.core.Settings;
 import dev.kmads.consignado.gateway.core.SnapshotService;
@@ -65,11 +66,14 @@ public final class Handlers {
     private final RateGuard sessionGuard;
     private final RateGuard contactGuard;
     private final boolean edgeKeyRequired;
+    private final RetentionService retention;
 
     public Handlers(TokenVerifier verifier, UserService users, EngineService engine, ProxyService proxy,
                     ContactService contacts, AdminService admin, SnapshotService snapshot, Secrets secrets,
                     Hasher hasher, AuditLog audit, Settings settings, boolean allowDevOrigin, LongSupplier nanos,
-                    RateGuard sessionGuard, RateGuard contactGuard, boolean edgeKeyRequired) {
+                    RateGuard sessionGuard, RateGuard contactGuard, boolean edgeKeyRequired,
+                    RetentionService retention) {
+        this.retention = retention;
         this.verifier = verifier;
         this.users = users;
         this.engine = engine;
@@ -160,6 +164,16 @@ public final class Handlers {
         });
     }
 
+    /** POST /api/sessions/{id}/end: the owner of the window (or the admin) ends it early. */
+    public GatewayResponse sessionsEnd(GatewayRequest req) {
+        return run(req, () -> {
+            Caller caller = requireUser(req);
+            Session s = engine.endByUser(Validate.sessionId(req.pathParam()), caller.claims().oid(),
+                    users.isAdmin(caller.claims()), hasher.hash(clientIp(req)));
+            return GatewayResponse.json(200, Views.session(s));
+        });
+    }
+
     // ------------------------------------------------------------------ proxy
 
     public GatewayResponse proxy(HostKind host, GatewayRequest req) {
@@ -220,7 +234,7 @@ public final class Handlers {
         });
     }
 
-    /** The timer: sessions and cluster first, then the snapshot. */
+    /** The timer: sessions and cluster first, then the snapshot, then the daily retention job. */
     public void reaper() {
         try {
             engine.tick();
@@ -231,6 +245,11 @@ public final class Handlers {
             snapshot.refreshIfDue();
         } catch (RuntimeException e) {
             LOG.log(Level.WARNING, Logs.fmt("reaper: snapshot refresh failed: {0}", Logs.of(e)));
+        }
+        try {
+            retention.runIfDue();
+        } catch (RuntimeException e) {
+            LOG.log(Level.WARNING, Logs.fmt("reaper: retention failed: {0}", Logs.of(e)));
         }
     }
 

@@ -183,6 +183,37 @@ public final class EngineService {
         return s;
     }
 
+    /**
+     * POST /api/sessions/{id}/end: the owner of the session (or the admin) ends the window early.
+     * The session goes to "ended"; the timer then stops the cluster when no other window is active.
+     * The window is not given back: a ready window is already counted, and a starting window is counted now
+     * (it asked for a cluster start). An ended or failed session is returned unchanged.
+     */
+    public Session endByUser(String sessionId, String callerId, boolean admin, String ipHash) {
+        for (int attempt = 0; attempt < 3; attempt++) {
+            Session s = sessions.find(sessionId).orElseThrow(ApiException::notFound);
+            if (!admin && !s.userId.equals(callerId)) throw ApiException.notFound();
+            if (!s.active()) return s;
+            boolean countNow = Session.STARTING.equals(s.state);
+            Instant now = clock.instant();
+            s.add(now, Stages.WINDOW_CLOSE, LifecycleEvent.DONE,
+                    admin && !s.userId.equals(callerId) ? "ended early by the owner" : "ended early by the user", null);
+            s.state = Session.ENDED;
+            s.endedAt = now;
+            if (!save(s)) continue; // the timer or a poll changed the row: read it again
+            release(s);
+            if (countNow) {
+                users.find(s.userId).ifPresent(u -> {
+                    u.windowsUsed = u.windowsUsed + 1;
+                    users.save(u);
+                });
+            }
+            audit.record(callerId, "session.end", s.id, ipHash);
+            return s;
+        }
+        throw ApiException.conflict("busy", "The window changed at the same time. Try again.");
+    }
+
     public List<Session> allSessions() {
         List<Session> all = new ArrayList<>(sessions.list());
         all.sort((a, b) -> b.requestedAt.compareTo(a.requestedAt));
