@@ -1,0 +1,337 @@
+package dev.kmads.consignado.gateway.http;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import dev.kmads.consignado.gateway.core.AdminService;
+import dev.kmads.consignado.gateway.core.ApiException;
+import dev.kmads.consignado.gateway.core.AuthException;
+import dev.kmads.consignado.gateway.core.Claims;
+import dev.kmads.consignado.gateway.core.ContactService;
+import dev.kmads.consignado.gateway.core.EngineService;
+import dev.kmads.consignado.gateway.core.Hasher;
+import dev.kmads.consignado.gateway.core.HostKind;
+import dev.kmads.consignado.gateway.core.Json;
+import dev.kmads.consignado.gateway.core.ProxyService;
+import dev.kmads.consignado.gateway.core.RateGuard;
+import dev.kmads.consignado.gateway.core.Session;
+import dev.kmads.consignado.gateway.core.Settings;
+import dev.kmads.consignado.gateway.core.SnapshotService;
+import dev.kmads.consignado.gateway.core.TraceBuilder;
+import dev.kmads.consignado.gateway.core.User;
+import dev.kmads.consignado.gateway.core.UserService;
+import dev.kmads.consignado.gateway.core.Validate;
+import dev.kmads.consignado.gateway.core.Views;
+import dev.kmads.consignado.gateway.ports.AuditLog;
+import dev.kmads.consignado.gateway.ports.Secrets;
+import dev.kmads.consignado.gateway.ports.TokenVerifier;
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import java.util.function.LongSupplier;
+import java.util.function.Supplier;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java.util.regex.Pattern;
+
+/**
+ * Every route of the gateway, without Azure types. The function classes only convert the
+ * request and the response. All token checks, errors and response headers are here.
+ */
+public final class Handlers {
+    private static final Logger LOG = Logger.getLogger("consignado.gateway");
+    public static final String DEV_ORIGIN = "http://localhost:5173";
+    public static final String EXPOSED = "x-consignado-host, x-consignado-trace";
+    private static final int MAX_JSON_BYTES = 16 * 1024;
+    private static final int MAX_TOKEN_CHARS = 8192;
+    private static final Pattern IP = Pattern.compile("^[0-9A-Fa-f:.]{3,64}$");
+
+    private record Caller(Claims claims, long identityMs) {
+        boolean guest() { return claims == null; }
+    }
+
+    private final TokenVerifier verifier;
+    private final UserService users;
+    private final EngineService engine;
+    private final ProxyService proxy;
+    private final ContactService contacts;
+    private final AdminService admin;
+    private final SnapshotService snapshot;
+    private final Secrets secrets;
+    private final Hasher hasher;
+    private final AuditLog audit;
+    private final Settings settings;
+    private final boolean allowDevOrigin;
+    private final LongSupplier nanos;
+    private final RateGuard sessionGuard;
+    private final RateGuard contactGuard;
+
+    public Handlers(TokenVerifier verifier, UserService users, EngineService engine, ProxyService proxy,
+                    ContactService contacts, AdminService admin, SnapshotService snapshot, Secrets secrets,
+                    Hasher hasher, AuditLog audit, Settings settings, boolean allowDevOrigin, LongSupplier nanos,
+                    RateGuard sessionGuard, RateGuard contactGuard) {
+        this.verifier = verifier;
+        this.users = users;
+        this.engine = engine;
+        this.proxy = proxy;
+        this.contacts = contacts;
+        this.admin = admin;
+        this.snapshot = snapshot;
+        this.secrets = secrets;
+        this.hasher = hasher;
+        this.audit = audit;
+        this.settings = settings;
+        this.allowDevOrigin = allowDevOrigin;
+        this.nanos = nanos;
+        this.sessionGuard = sessionGuard;
+        this.contactGuard = contactGuard;
+    }
+
+    // ----------------------------------------------------------------- public
+
+    public GatewayResponse health(GatewayRequest req) {
+        return run(req, () -> GatewayResponse.json(200, Map.of("status", "UP")));
+    }
+
+    public GatewayResponse engine(GatewayRequest req) {
+        return run(req, () -> GatewayResponse.json(200, engine.view()));
+    }
+
+    public GatewayResponse snapshot(GatewayRequest req) {
+        return run(req, () -> GatewayResponse.raw(200, "application/json",
+                snapshot.current().getBytes(StandardCharsets.UTF_8)));
+    }
+
+    public GatewayResponse contact(GatewayRequest req) {
+        return run(req, () -> {
+            Caller caller = authenticate(req);
+            String ip = clientIp(req);
+            contactGuard.check(caller.guest() ? "ip:" + hasher.hash(ip == null ? "unknown" : ip) : caller.claims().oid());
+            return GatewayResponse.json(201,
+                    contacts.create(json(req), ip, caller.guest() ? null : caller.claims().oid()));
+        });
+    }
+
+    // ------------------------------------------------------------------- user
+
+    public GatewayResponse me(GatewayRequest req) {
+        return run(req, () -> {
+            Caller caller = requireUser(req);
+            return GatewayResponse.json(200, Views.me(users.me(caller.claims(), clientIp(req)), settings));
+        });
+    }
+
+    public GatewayResponse profile(GatewayRequest req) {
+        return run(req, () -> {
+            Caller caller = requireUser(req);
+            return GatewayResponse.json(200,
+                    Views.me(users.updateProfile(caller.claims(), json(req), clientIp(req)), settings));
+        });
+    }
+
+    public GatewayResponse sessionsCreate(GatewayRequest req) {
+        return run(req, () -> {
+            Caller caller = requireUser(req);
+            String ip = clientIp(req);
+            User user = users.me(caller.claims(), ip);
+            sessionGuard.check(user.id);
+            // The gateway reads its secrets here; the time is the Key Vault stage of the window.
+            long t = nanos.getAsLong();
+            boolean cached;
+            try {
+                cached = secrets.read(ProxyService.HOST_KEY).cached();
+            } catch (RuntimeException e) {
+                cached = false;
+            }
+            long kvMs = cached ? 0 : ms(t);
+            EngineService.WindowResult result = engine.requestWindow(user, users.isAdmin(caller.claims()),
+                    caller.identityMs(), kvMs, cached, hasher.hash(ip));
+            return GatewayResponse.json(result.created() ? 201 : 200, Views.session(result.session()));
+        });
+    }
+
+    public GatewayResponse sessionsGet(GatewayRequest req) {
+        return run(req, () -> {
+            Caller caller = requireUser(req);
+            Session s = engine.poll(Validate.sessionId(req.pathParam()), caller.claims().oid(),
+                    users.isAdmin(caller.claims()));
+            return GatewayResponse.json(200, Views.session(s));
+        });
+    }
+
+    // ------------------------------------------------------------------ proxy
+
+    public GatewayResponse proxy(HostKind host, GatewayRequest req) {
+        long start = nanos.getAsLong();
+        return run(req, () -> {
+            Caller caller = authenticate(req);
+            User user = caller.guest() ? null : users.me(caller.claims(), clientIp(req));
+            ProxyService.Result r = proxy.forward(host, req.method(), req.pathParam(), req.rawQuery(), req.headers(),
+                    req.body(), user, caller.identityMs(), start);
+            GatewayResponse response = GatewayResponse.raw(r.status(), r.contentType(), r.body());
+            response.headers().put("x-consignado-host", r.host().id());
+            response.headers().put("x-consignado-trace", TraceBuilder.encode(r.trace()));
+            response.headers().put("Access-Control-Expose-Headers", EXPOSED);
+            return response;
+        });
+    }
+
+    // ------------------------------------------------------------------ admin
+
+    public GatewayResponse admin(GatewayRequest req) {
+        return run(req, () -> {
+            Caller caller = requireUser(req);
+            if (!users.isAdmin(caller.claims())) throw ApiException.forbidden();
+            String adminId = caller.claims().oid();
+            String ipHash = hasher.hash(clientIp(req));
+            String path = req.pathParam() == null ? "" : req.pathParam().replaceAll("^/+|/+$", "");
+            String key = req.method() + " " + path;
+            if (path.startsWith("users/") && req.method().equals("POST")) {
+                return GatewayResponse.json(200, admin.act(adminId, path.substring("users/".length()), json(req), ipHash));
+            }
+            GatewayResponse response = switch (key) {
+                case "GET users" -> GatewayResponse.json(200, admin.listUsers());
+                case "GET sessions" -> GatewayResponse.json(200,
+                        engine.allSessions().stream().map(Views::session).toList());
+                case "GET state" -> GatewayResponse.json(200, admin.state());
+                case "GET contacts" -> GatewayResponse.json(200, contacts.list());
+                case "POST pause" -> GatewayResponse.json(200, admin.pause(adminId, json(req), ipHash));
+                case "POST engine/stop" -> GatewayResponse.json(200, admin.stopEngine(adminId, ipHash));
+                default -> throw ApiException.notFound();
+            };
+            if (req.method().equals("GET")) audit.record(adminId, "admin.read", path, ipHash);
+            return response;
+        });
+    }
+
+    /**
+     * The budget action group calls this. The Functions host checks the function key before this code runs.
+     * A body that shows a spend below the budget (an early alert) changes nothing; every other body pauses.
+     */
+    public GatewayResponse budgetHook(GatewayRequest req) {
+        return run(req, () -> {
+            if (belowBudget(req.body())) {
+                audit.record("budget-alert", "budget.alert.early", "engine", null);
+                return GatewayResponse.json(200, Map.of("status", "noted"));
+            }
+            engine.budgetExceeded();
+            return GatewayResponse.json(200, Map.of("status", "paused"));
+        });
+    }
+
+    /** The timer: sessions and cluster first, then the snapshot. */
+    public void reaper() {
+        try {
+            engine.tick();
+        } catch (RuntimeException e) {
+            LOG.log(Level.WARNING, "reaper: engine tick failed: {0}", e.getClass().getSimpleName());
+        }
+        try {
+            snapshot.refreshIfDue();
+        } catch (RuntimeException e) {
+            LOG.log(Level.WARNING, "reaper: snapshot refresh failed: {0}", e.getClass().getSimpleName());
+        }
+    }
+
+    // ---------------------------------------------------------------- helpers
+
+    private static boolean belowBudget(byte[] body) {
+        try {
+            JsonNode data = Json.MAPPER.readTree(body).path("data");
+            JsonNode spent = data.path("SpendingAmount");
+            JsonNode budget = data.path("Budget");
+            if (spent.isMissingNode() || budget.isMissingNode()) return false;
+            double s = Double.parseDouble(spent.asText());
+            double b = Double.parseDouble(budget.asText());
+            return b > 0 && s < b;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private GatewayResponse run(GatewayRequest req, Supplier<GatewayResponse> action) {
+        GatewayResponse response;
+        if (req.method().equals("OPTIONS")) {
+            response = new GatewayResponse(204, new java.util.LinkedHashMap<>(), new byte[0]);
+        } else {
+            try {
+                response = action.get();
+            } catch (ApiException e) {
+                response = GatewayResponse.json(e.status(), new Views.ErrorBody(e.code(), e.getMessage()));
+                if (e.retryAfterSeconds() != null) {
+                    response.headers().put("Retry-After", String.valueOf(e.retryAfterSeconds()));
+                }
+            } catch (RuntimeException e) {
+                // Only the class name goes to the log: a message can hold a host name or a value.
+                LOG.log(Level.SEVERE, "request failed: {0}", e.getClass().getName());
+                response = GatewayResponse.json(500, new Views.ErrorBody("internal", "Internal error"));
+            }
+        }
+        response.headers().put("Cache-Control", "no-store");
+        response.headers().put("X-Content-Type-Options", "nosniff");
+        if (allowDevOrigin && DEV_ORIGIN.equals(req.header("origin"))) {
+            response.headers().put("Access-Control-Allow-Origin", DEV_ORIGIN);
+            response.headers().put("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, OPTIONS");
+            response.headers().put("Access-Control-Allow-Headers", "authorization, content-type");
+            response.headers().put("Access-Control-Expose-Headers", EXPOSED);
+            response.headers().put("Access-Control-Max-Age", "600");
+            response.headers().put("Vary", "Origin");
+        }
+        return response;
+    }
+
+    /** No Authorization header: guest. A header that does not verify: 401, never a silent guest. */
+    private Caller authenticate(GatewayRequest req) {
+        String header = req.header("authorization");
+        if (header == null || header.isBlank()) return new Caller(null, 0);
+        if (header.length() > MAX_TOKEN_CHARS || !header.regionMatches(true, 0, "Bearer ", 0, 7)) {
+            throw invalidToken();
+        }
+        long t = nanos.getAsLong();
+        try {
+            Claims claims = verifier.verify(header.substring(7).strip());
+            return new Caller(claims, ms(t));
+        } catch (AuthException e) {
+            LOG.log(Level.INFO, "token refused: {0}", e.getMessage());
+            throw invalidToken();
+        }
+    }
+
+    private static ApiException invalidToken() {
+        return new ApiException(401, "invalid-token", "The token is not valid");
+    }
+
+    private Caller requireUser(GatewayRequest req) {
+        Caller caller = authenticate(req);
+        if (caller.guest()) throw ApiException.unauthorized();
+        return caller;
+    }
+
+    /**
+     * Azure Front Door sets X-Azure-ClientIP. The app accepts traffic from Front Door only,
+     * and that is the only reason to trust this header.
+     */
+    static String clientIp(GatewayRequest req) {
+        String ip = req.header("x-azure-clientip");
+        if (ip == null || ip.isBlank()) {
+            String forwarded = req.header("x-forwarded-for");
+            if (forwarded != null) ip = forwarded.split(",")[0].strip();
+        }
+        if (ip == null) return null;
+        ip = ip.strip();
+        return IP.matcher(ip).matches() ? ip : null;
+    }
+
+    private static JsonNode json(GatewayRequest req) {
+        if (req.body().length == 0) throw ApiException.badRequest("A JSON body is required");
+        if (req.body().length > MAX_JSON_BYTES) {
+            throw new ApiException(413, "body-too-large", "Request body is too large");
+        }
+        try {
+            return Json.MAPPER.readTree(req.body());
+        } catch (Exception e) {
+            throw ApiException.badRequest("The body is not valid JSON");
+        }
+    }
+
+    private long ms(long fromNanos) {
+        return Math.max(0, (nanos.getAsLong() - fromNanos) / 1_000_000);
+    }
+}
