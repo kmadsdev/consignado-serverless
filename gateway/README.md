@@ -20,6 +20,7 @@ Plain Java: no Spring, no dependency injection framework. All objects are built 
 |---|---|---|
 | `GET /api/health` | all | `{status:"UP"}`, a constant: no configuration, no Azure call, no edge key |
 | `GET /api/engine` | all | `Engine` |
+| `GET /api/status?host=functions\|aks` | all for `functions`; token for `aks` | `PlatformStatus` (see "Status page"); 400 for another `host` |
 | `GET /api/snapshot` | all | masked copy of shared data `{asOf, agreements, customers, contracts}` |
 | `POST /api/contact` | all + Turnstile token | `ContactRequest` (201), email to the owner. Kinds `contact` and `more-windows`. A signed-in sender is linked: the row has `userId` (null for a guest), and `GET /api/admin/contacts` shows it |
 | `GET /api/me` | token | `Me`; the first call creates the user and emails the owner |
@@ -29,17 +30,19 @@ Plain Java: no Spring, no dependency injection framework. All objects are built 
 | `POST /api/sessions/{id}/end` | owner or admin | ends the window early: `Session` in state `ended` (200; an ended or failed session comes back unchanged). The window is not given back to the quota (a `starting` window is counted now). The timer then stops the cluster when no window is active. 404 for another user's session |
 | `GET, POST, PATCH /api/fn/{*path}` | token; guest only `POST api/v1/simulations/preview` (503 `paused` while the engine is paused for budget) | proxy to the Functions API host |
 | `GET, POST, PATCH /api/aks/{*path}` | token + own window in state `ready` | proxy to the AKS host |
-| `GET /api/admin/users`, `POST /api/admin/users/{id}` | admin | `AdminUser[]` / `AdminUser`; actions `approve`, `hold`, `block`, `grant` (`windows` 1 to 20, default 1, added to the maximum), `delete` (see "Personal data") |
+| `GET /api/admin/users`, `POST /api/admin/users/{id}` | admin | `AdminUser[]` / `AdminUser`; actions `approve`, `hold`, `block`, `grant` (`windows` 1 to 20, default 1, added to the maximum), `set` (`windowsMax` 0 to 50 and/or `windowMinutes` 5 to 60, whole numbers; audit `admin.user.set`), `delete` (see "Personal data"). `Me` and `AdminUser` carry `windowMinutes` (default `WINDOW_MINUTES`); a new window lasts the owner's `windowMinutes` at the moment it opens, and a change does not alter an open window |
 | `GET /api/admin/sessions`, `/state`, `/contacts` | admin | `Session[]`, `AdminState`, `ContactRequest[]` |
 | `POST /api/admin/pause` `{paused}`, `POST /api/admin/engine/stop` | admin | `AdminState` |
 | `POST /api/hooks/budget` | function key | spend at or above the budget: pauses (reason `budget`) and stops the cluster; spend below: audit only; a body without numeric `data.SpendingAmount` and `data.Budget`: 400, no pause |
 | timer `reaper`, every minute | - | advances sessions, ends windows, stops the idle cluster, checks the month-to-date cost every 30 minutes (at or above `BUDGET_LIMIT_USD`: same pause as the budget hook), refreshes the snapshot every 10 minutes, runs the retention job once per day |
 
-Errors are `{code, message}`. The proxy returns the status and the JSON of the API host unchanged, plus `x-consignado-host` and `x-consignado-trace` (base64url JSON `RequestTrace`). `cold` is true only for the Functions host and only when the upstream call took more than 8 s; the AKS host never reports `cold`.
+Errors are `{code, message}`. On an upstream failure the failed stage of the trace has `status: "error"` and a short `detail` (`upstream answered 503`, `timeout after 30 s` (Functions) / `10 s` (AKS), `no answer from the API host (connection failed)`, `function key not found in Key Vault` on stage `keyvault`), and the error answer still carries `x-consignado-trace`. The proxy returns the status and the JSON of the API host unchanged, plus `x-consignado-host` and `x-consignado-trace` (base64url JSON `RequestTrace`). `cold` is true only for the Functions host and only when the upstream call took more than 8 s; the AKS host never reports `cold`.
 
 ## Configuration (environment variables, names only)
 
 Required: `AZURE_CLIENT_ID`, `ENTRA_TENANT_ID`, `ENTRA_API_AUDIENCE`, `ADMIN_OID`, `AKS_RESOURCE_ID`, `AKS_API_SERVER_URL`, `AKS_CA_CERT_B64`, `AKS_INTERNAL_URL`, `APIFN_BASE_URL`, `KEY_VAULT_URL`, `STORAGE_ACCOUNT`, `OWNER_EMAIL`, `WINDOW_MINUTES`, `WINDOWS_MAX`, `COOLDOWN_MINUTES`, `BUDGET_LIMIT_USD`.
+
+Optional, status page (a missing id makes that service `unknown` with detail `not configured`): `GATEWAY_APP_ID`, `API_APP_ID`, `KEY_VAULT_ID`, `POSTGRES_ID` (full ARM resource ids; the cluster id is `AKS_RESOURCE_ID`).
 
 Optional: `ACS_ENDPOINT` and `EMAIL_SENDER` (or `ACS_SENDER`) (email; without them the mailer writes only an audit row), `ALLOW_DEV_ORIGIN=true` (CORS for `http://localhost:5173`), `EDGE` (the edge key is required unless `EDGE=local`; a missing value or any other value keeps the check on), `DAILY_WINDOWS_MAX` (default 12), `ENTRA_SPA_CLIENT_ID` (when set, a token whose `azp` is another client application is refused), `TURNSTILE_HOSTNAMES` (comma list; default `consignado.kmads.dev,cluster.consignado.kmads.dev`).
 
@@ -53,7 +56,7 @@ Tables (made by Terraform): `users`, `sessions`, `engine`, `contacts`, `audit`. 
 
 ```bash
 cd gateway
-./mvnw -B -ntp verify     # compile, 100 tests (JUnit 5, no network), package
+./mvnw -B -ntp verify     # compile, 131 tests (JUnit 5, no network), package
 ls target/azure-functions/func-consignado-gw-km01   # the staged function app
 ```
 
@@ -68,6 +71,44 @@ A JDK 21 or newer is necessary. The tests run the real core and the real handler
 - A cluster that something else started (for example the deploy job) gets 20 minutes before the timer stops it.
 - `paused` by the admin: new windows are refused, running windows end normally. The budget hook also ends the running windows and stops the cluster at once.
 - The gateway can only read, start and stop the cluster. `ArmClusterControl` has no code for a delete or an update.
+
+## Status page (`GET /api/status`)
+
+Built per host and cached 15 seconds in the instance. All sources run in parallel; each call has a 3 s timeout and each source a 3.5 s limit; a failed or late source makes only its service `unknown`, the route still answers 200. Azure Monitor numbers cover the last 5 minutes and are about 1 to 3 minutes behind.
+
+Order: `functions`: edge, gateway, identity, keyvault, functions, database. `aks`: edge, gateway, identity, keyvault, load-balancer, cluster, node, pods, database.
+
+| Service | Sources | State rule |
+|---|---|---|
+| edge | none (fixed text) | `up`: the request came through the Worker |
+| gateway, functions | ARM `properties.state`, resource health, metrics | Running = up, Stopped = stopped; health Degraded/Unavailable makes it degraded/down (the gateway is always at least up: it answers) |
+| identity | the gateway's Entra ID signing keys (loaded if the cache is empty) | up with "signing keys fetched N min ago"; unknown when they cannot be fetched |
+| keyvault | metrics, resource health, ARM | Availability >= 99.9 % up, > 0 degraded, 0 down |
+| database | ARM `properties.state`, metrics (`is_db_alive` for the state only) | Ready = up, Stopped = stopped, Starting/Updating = starting; `is_db_alive` 0 = down |
+| cluster | ARM power state (existing role) | Running = up, Starting = starting, else stopped |
+| load-balancer | the gateway's own `GET /actuator/health/readiness` to 10.10.3.200, metric `latency-avg` "now" | 200 = up, else down; not called when the cluster is not running |
+| node, pods | Kubernetes API (existing reader role), node metrics | all Ready = up, some = degraded, none = down; pods detail: ready count, restarts, image tag, age of the newest pod; no call when the cluster is not running |
+
+Metric table (names checked with `az monitor metrics list-definitions` on 2026-11-17; the code table is `core/StatusMetrics.java`):
+
+| Service | Azure metric | Aggregation over 5 x 1 min | key | unit |
+|---|---|---|---|---|
+| gateway, functions | `OnDemandFunctionExecutionCount` | sum of Total | `requests` (function executions) | count |
+| gateway, functions | `InstanceCount` | mean of Average | `instances` | count |
+| gateway, functions | `CpuPercentage` | mean of Average | `cpu` | % |
+| gateway, functions | `MemoryWorkingSet` | mean of Average / 1 MiB | `memory` | MB |
+| keyvault | `ServiceApiHit` | sum of Total | `requests` | count |
+| keyvault | `ServiceApiLatency` | mean of Average | `latency-avg` | ms |
+| keyvault | `Availability` | mean of Average | `availability` | % |
+| database | `cpu_percent`, `memory_percent` | mean of Average | `cpu`, `memory` | % |
+| database | `active_connections` | mean of Average | `connections` | count |
+| database | `is_db_alive` | Maximum of the newest point | (state only) | - |
+| node | `node_cpu_usage_percentage`, `node_memory_working_set_percentage` (on `aks-consignado`) | mean of Average | `cpu`, `memory` | % |
+| pods | Kubernetes (not Azure Monitor) | now | `replicas` (ready pods), `restarts` | count |
+
+Flex Consumption function apps expose no request count, HTTP 5xx or response time as platform metrics, so the status page shows none of those for them (no invented number). Error and latency per request come from the trace header. A metric without a data point in the window has `value: null`.
+
+Needs: role `Monitoring Reader` on `rg-consignado` for `id-consignado-gw`; resource provider `Microsoft.ResourceHealth` registered in the subscription (it was `NotRegistered` on 2026-11-17; until then the detail says "resource health: not readable").
 
 ## Personal data: retention and deletion
 
