@@ -24,6 +24,11 @@ public final class EngineService {
     public static final String READINESS_PATH = "actuator/health/readiness";
     private static final Duration OBSERVE_EVERY = Duration.ofSeconds(3);
     private static final Duration START_RETRY_AFTER = Duration.ofMinutes(2);
+    /**
+     * A start that an instance sent (lastStartAt) less than this ago is not sent again by another instance.
+     * Shorter than the timer period (1 minute), so the retry of each tick stays.
+     */
+    private static final Duration START_CLAIM = Duration.ofSeconds(30);
     public static final Duration BUDGET_CHECK_EVERY = Duration.ofMinutes(30);
     private static final String CLUSTER = "aks-consignado";
     private static final java.util.logging.Logger LOG = java.util.logging.Logger.getLogger("consignado.gateway");
@@ -136,13 +141,15 @@ public final class EngineService {
             startCluster(s, now, user.id, ipHash);
         }
 
-        if (!(EngineRecord.RUNNING.equals(rec.state) && rec.externalSince == null && power.running())) {
-            setState(rec, EngineRecord.STARTING, now);
-        }
-        rec.externalSince = null;
-        rec.activeSessions = rec.activeSessions + 1;
         sessions.save(s);
-        engine.save(rec);
+        // The ARM start is done: write only the fields of this path, on the newest row (a pause stays).
+        EngineRows.update(engine, r -> {
+            if (!(EngineRecord.RUNNING.equals(r.state) && r.externalSince == null && power.running())) {
+                setState(r, EngineRecord.STARTING, now);
+            }
+            r.externalSince = null;
+            r.activeSessions = r.activeSessions + 1;
+        });
         user.activeSessionId = s.id;
         // Only this field changes, on the newest row: an admin block made meanwhile stays.
         UserRows.update(users, user.id, u -> u.activeSessionId = s.id);
@@ -185,10 +192,8 @@ public final class EngineService {
             Signals signals = new Signals();
             boolean wasReady = advance(s, signals, now, false);
             if (wasReady) {
-                EngineRecord rec = engine.load();
-                if (!EngineRecord.RUNNING.equals(rec.state)) {
-                    setState(rec, EngineRecord.RUNNING, now);
-                    engine.save(rec);
+                if (!EngineRecord.RUNNING.equals(engine.load().state)) {
+                    EngineRows.updateQuietly(engine, r -> setState(r, EngineRecord.RUNNING, now), "window ready");
                 }
             }
             return sessions.find(sessionId).orElse(s);
@@ -249,13 +254,70 @@ public final class EngineService {
         settle(signals, now, "gateway", false);
     }
 
-    /** Looks at the real power state and moves the engine state. Stops the cluster when nothing is active. */
+    /**
+     * What one settle decided, after its write of the engine row won. start / stop: send that ARM call now
+     * (the write was the claim). previous*: the row before a stop claim, to give it back when ARM refuses.
+     */
+    private record Decision(boolean start, boolean stop, boolean external, boolean stopped, String previousState,
+                            Instant previousSince, Instant previousExternalSince) {}
+
+    /**
+     * Looks at the real power state and moves the engine state. Stops the cluster when nothing is active.
+     * The slow reads (ARM power state, session rows) come first. Then the engine row is read and written with
+     * its ETag; on a conflict it is read again and the decision is made again on the newer row (at most
+     * EngineRows.ATTEMPTS times). The ARM start or stop is sent only after that write won: the write is the
+     * claim, so two gateway instances never both send it, and a pause written meanwhile is never overwritten
+     * (this path never sets paused or pausedReason).
+     */
     private void settle(Signals signals, Instant now, String who, boolean force) {
-        EngineRecord rec = engine.load();
+        PowerState power = signals.power();
         List<Session> open = sessions.listOpen();
         List<Session> active = open.stream().filter(Session::active).toList();
         List<Session> waiting = open.stream().filter(s -> !s.active()).toList();
-        PowerState power = signals.power();
+
+        Decision d = null;
+        for (int attempt = 0; attempt < EngineRows.ATTEMPTS && d == null; attempt++) {
+            EngineRecord rec = engine.load();
+            Decision next = decide(rec, active, power, signals, now, force);
+            try {
+                engine.save(rec);
+                d = next;
+            } catch (EngineStore.ConflictException e) {
+                // Another writer (the admin, the webhook, a poll, another instance) was first: read it again.
+            }
+        }
+        if (d == null) {
+            LOG.warning(Logs.fmt("engine row changed {0} times: this settle changes nothing", EngineRows.ATTEMPTS));
+            return;
+        }
+
+        if (d.external()) audit.record(who, "engine.external-running", CLUSTER, null);
+        if (d.start()) {
+            boolean accepted = cluster.start();
+            audit.record(who, accepted ? "engine.start.retry" : "engine.start.refused", CLUSTER, null);
+        }
+        if (d.stop()) stopCluster(d, waiting, now, who);
+        if (d.stopped()) {
+            for (Session s : waiting) {
+                LifecycleEvent sent = s.last(Stages.CLUSTER_STOP);
+                Long ms = sent == null ? null : Math.max(0, Duration.between(Instant.parse(sent.ts()), now).toMillis());
+                s.add(now, Stages.CLUSTER_STOP, LifecycleEvent.DONE, "cluster " + CLUSTER + " is stopped", ms);
+                s.open = false;
+                save(s);
+            }
+        }
+    }
+
+    /** The rules of settle, on one read of the row. Changes only the fields that the timer owns. No I/O. */
+    private Decision decide(EngineRecord rec, List<Session> active, PowerState power, Signals signals,
+                            Instant now, boolean force) {
+        boolean start = false;
+        boolean stop = false;
+        boolean external = false;
+        boolean stopped = false;
+        String previousState = rec.state;
+        Instant previousSince = rec.since;
+        Instant previousExternalSince = rec.externalSince;
 
         if (!active.isEmpty()) {
             rec.externalSince = null;
@@ -265,9 +327,10 @@ public final class EngineService {
                 // The start was lost or refused: send it again, but give ARM time to show the first one.
                 Session oldest = active.stream().min((a, b) -> a.requestedAt.compareTo(b.requestedAt)).get();
                 if (!signals.startSent
-                        && Duration.between(oldest.requestedAt, now).compareTo(START_RETRY_AFTER) >= 0) {
-                    boolean accepted = cluster.start();
-                    audit.record(who, accepted ? "engine.start.retry" : "engine.start.refused", CLUSTER, null);
+                        && Duration.between(oldest.requestedAt, now).compareTo(START_RETRY_AFTER) >= 0
+                        && startFree(rec, now)) {
+                    rec.lastStartAt = now;
+                    start = true;
                 }
             }
         } else if (!power.known()) {
@@ -275,18 +338,28 @@ public final class EngineService {
         } else if (power.transitioning()) {
             if (power.stopping()) setState(rec, EngineRecord.STOPPING, now);
         } else if (power.running()) {
-            boolean external = !EngineRecord.RUNNING.equals(rec.state) && !EngineRecord.STARTING.equals(rec.state)
+            boolean isExternal = !EngineRecord.RUNNING.equals(rec.state) && !EngineRecord.STARTING.equals(rec.state)
                     && !EngineRecord.STOPPING.equals(rec.state);
-            if (force) {
-                stopCluster(rec, waiting, now, who);
-            } else if (external && rec.externalSince == null) {
+            // A stop that an instance sent less than START_RETRY_AFTER ago: ARM may not show it yet.
+            boolean stopJustSent = EngineRecord.STOPPING.equals(rec.state) && rec.since != null
+                    && Duration.between(rec.since, now).compareTo(START_RETRY_AFTER) < 0;
+            if (stopJustSent) {
+                // Wait for ARM. Never send a second stop.
+            } else if (force) {
+                stop = true;
+            } else if (isExternal && rec.externalSince == null) {
                 // Something else started the cluster (for example the deploy job). Give it time to finish.
                 rec.externalSince = now;
                 setState(rec, EngineRecord.RUNNING, now);
-                audit.record(who, "engine.external-running", CLUSTER, null);
+                external = true;
             } else if (rec.externalSince == null
                     || Duration.between(rec.externalSince, now).compareTo(settings.idleGrace()) >= 0) {
-                stopCluster(rec, waiting, now, who);
+                stop = true;
+            }
+            if (stop) {
+                rec.externalSince = null;
+                rec.state = EngineRecord.STOPPING;
+                rec.since = now;
             }
         } else if (power.stopped()) {
             if (EngineRecord.STOPPING.equals(rec.state) || EngineRecord.RUNNING.equals(rec.state)
@@ -297,25 +370,50 @@ public final class EngineService {
                 setState(rec, EngineRecord.STOPPED, now);
             }
             rec.externalSince = null;
-            for (Session s : waiting) {
-                LifecycleEvent sent = s.last(Stages.CLUSTER_STOP);
-                Long ms = sent == null ? null : Math.max(0, Duration.between(Instant.parse(sent.ts()), now).toMillis());
-                s.add(now, Stages.CLUSTER_STOP, LifecycleEvent.DONE, "cluster " + CLUSTER + " is stopped", ms);
-                s.open = false;
-                save(s);
-            }
+            stopped = true;
         }
         rec.activeSessions = active.size();
         if (rec.since == null) rec.since = now;
-        engine.save(rec);
+        return new Decision(start, stop, external, stopped, previousState, previousSince, previousExternalSince);
     }
 
-    private void stopCluster(EngineRecord rec, List<Session> waiting, Instant now, String who) {
+    private static boolean startFree(EngineRecord rec, Instant now) {
+        return rec.lastStartAt == null || Duration.between(rec.lastStartAt, now).compareTo(START_CLAIM) >= 0;
+    }
+
+    /**
+     * Writes lastStartAt with the ETag before the timer sends a start. False when another instance sent one
+     * less than START_CLAIM ago (or the row kept changing): then this instance does not send it.
+     */
+    private boolean claimStart(Instant now) {
+        for (int attempt = 0; attempt < EngineRows.ATTEMPTS; attempt++) {
+            EngineRecord rec = engine.load();
+            if (!startFree(rec, now)) return false;
+            rec.lastStartAt = now;
+            try {
+                engine.save(rec);
+                return true;
+            } catch (EngineStore.ConflictException e) {
+                // read it again
+            }
+        }
+        return false;
+    }
+
+    /** Sends the stop that this instance claimed. A refused stop gives the claim back, so the next tick tries. */
+    private void stopCluster(Decision d, List<Session> waiting, Instant now, String who) {
         boolean accepted = cluster.stop();
         audit.record(who, accepted ? "engine.stop" : "engine.stop.refused", CLUSTER, null);
-        if (!accepted) return;
-        rec.externalSince = null;
-        setState(rec, EngineRecord.STOPPING, now);
+        if (!accepted) {
+            EngineRows.updateQuietly(engine, r -> {
+                if (EngineRecord.STOPPING.equals(r.state) && now.equals(r.since)) {
+                    r.state = d.previousState();
+                    r.since = d.previousSince();
+                    r.externalSince = d.previousExternalSince();
+                }
+            }, "refused stop");
+            return;
+        }
         for (Session s : waiting) {
             if (s.last(Stages.CLUSTER_STOP) == null) {
                 s.add(now, Stages.CLUSTER_STOP, LifecycleEvent.ACTIVE, "ARM accepted the stop of " + CLUSTER, null);
@@ -327,11 +425,13 @@ public final class EngineService {
     // ------------------------------------------------------------ admin, budget
 
     public void pause(boolean paused, String reason, String who, String ipHash) {
-        EngineRecord rec = engine.load();
-        rec.paused = paused;
-        rec.pausedReason = paused ? reason : null;
-        if (rec.since == null) rec.since = clock.instant();
-        engine.save(rec);
+        // On the newest row, with a retry: a pause is never lost to a timer write, and it never undoes one.
+        Instant now = clock.instant();
+        EngineRows.update(engine, rec -> {
+            rec.paused = paused;
+            rec.pausedReason = paused ? reason : null;
+            if (rec.since == null) rec.since = now;
+        });
         audit.record(who, paused ? "engine.pause." + reason : "engine.resume", "engine", ipHash);
     }
 
@@ -364,7 +464,11 @@ public final class EngineService {
             return false;
         }
         rec.lastBudgetCheckAt = now;
-        engine.save(rec);
+        try {
+            engine.save(rec);
+        } catch (EngineStore.ConflictException e) {
+            return false; // another instance (or writer) was first; the next tick checks again
+        }
         if (rec.paused && "budget".equals(rec.pausedReason)) return false;
         if (!overBudget(cost.monthToDate().orElse(null), settings.budgetLimit(), settings.budgetCurrency())) return false;
         LOG.warning(Logs.fmt("budget guard: month-to-date cost is at or above {0} {1}; pausing",
@@ -459,7 +563,7 @@ public final class EngineService {
                 s.add(now, Stages.ARM_START, LifecycleEvent.DONE, "ARM started " + CLUSTER, since(s, now));
             } else if (power.stopped() && mayStart && !signals.startSent) {
                 signals.startSent = true;
-                startCluster(s, now, "gateway", null);
+                if (claimStart(now)) startCluster(s, now, "gateway", null);
             }
             if (!s.done(Stages.ARM_START)) {
                 save(s);

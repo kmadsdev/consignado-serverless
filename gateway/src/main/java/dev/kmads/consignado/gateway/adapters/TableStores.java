@@ -294,6 +294,8 @@ public final class TableStores {
                     r.lastSnapshotAt = time(e, "lastSnapshotAt");
                     r.lastRetentionAt = time(e, "lastRetentionAt");
                     r.lastBudgetCheckAt = time(e, "lastBudgetCheckAt");
+                    r.lastStartAt = time(e, "lastStartAt");
+                    r.etag = e.getETag();
                 });
                 return r;
             }
@@ -311,7 +313,24 @@ public final class TableStores {
                 put(e, "lastSnapshotAt", Times.iso(r.lastSnapshotAt));
                 put(e, "lastRetentionAt", Times.iso(r.lastRetentionAt));
                 put(e, "lastBudgetCheckAt", Times.iso(r.lastBudgetCheckAt));
-                table.upsertEntityWithResponse(e, TableEntityUpdateMode.REPLACE, null, null);
+                put(e, "lastStartAt", Times.iso(r.lastStartAt));
+                try {
+                    Response<Void> response;
+                    if (r.etag == null) {
+                        // No row was read: create it. A row that another instance created meanwhile -> 409.
+                        response = table.createEntityWithResponse(e, null, null);
+                    } else {
+                        // If-Match: a row that changed after the read is not overwritten (412 -> conflict).
+                        e.addProperty(ETAG, r.etag);
+                        response = table.updateEntityWithResponse(e, TableEntityUpdateMode.REPLACE, true, null, null);
+                    }
+                    String etag = response.getHeaders().getValue("ETag");
+                    if (etag != null) r.etag = etag;
+                } catch (TableServiceException ex) {
+                    int status = ex.getResponse() == null ? 0 : ex.getResponse().getStatusCode();
+                    if (status == 412 || status == 409) throw new EngineStore.ConflictException();
+                    throw ex;
+                }
             }
         };
     }

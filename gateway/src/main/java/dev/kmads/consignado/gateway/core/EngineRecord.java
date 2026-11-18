@@ -24,4 +24,8 @@ public final class EngineRecord {
     public Instant lastRetentionAt;
     /** The last cost check of the timer's budget guard. */
     public Instant lastBudgetCheckAt;
+    /** The last start that the timer sent again. It is the claim: only the instance that wrote it sends the start. */
+    public Instant lastStartAt;
+    /** The ETag of the row when it was read (null: the row did not exist). Not a column. */
+    public String etag;
 }

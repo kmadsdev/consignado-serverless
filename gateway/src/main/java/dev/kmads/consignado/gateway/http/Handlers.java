@@ -42,7 +42,7 @@ public final class Handlers {
     private static final Logger LOG = Logger.getLogger("consignado.gateway");
     public static final String DEV_ORIGIN = "http://localhost:5173";
     public static final String EDGE_KEY = "edge-key";
-    public static final String EXPOSED = "x-consignado-host, x-consignado-trace";
+    public static final String EXPOSED = "x-consignado-host, x-consignado-trace, etag, location";
     private static final int MAX_JSON_BYTES = 16 * 1024;
     private static final int MAX_TOKEN_CHARS = 8192;
     private static final Pattern IP = Pattern.compile("^[0-9A-Fa-f:.]{3,64}$");
@@ -217,6 +217,7 @@ public final class Handlers {
             ProxyService.Result r = proxy.forward(host, req.method(), req.pathParam(), req.rawQuery(), req.headers(),
                     req.body(), user, !caller.guest() && users.isAdmin(caller.claims()), caller.identityMs(), start);
             GatewayResponse response = GatewayResponse.raw(r.status(), r.contentType(), r.body());
+            response.headers().putAll(r.headers());
             response.headers().put("x-consignado-host", r.host().id());
             response.headers().put("x-consignado-trace", TraceBuilder.encode(r.trace()));
             response.headers().put("Access-Control-Expose-Headers", EXPOSED);
@@ -379,7 +380,7 @@ public final class Handlers {
         if (allowDevOrigin && DEV_ORIGIN.equals(req.header("origin"))) {
             response.headers().put("Access-Control-Allow-Origin", DEV_ORIGIN);
             response.headers().put("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, OPTIONS");
-            response.headers().put("Access-Control-Allow-Headers", "authorization, content-type");
+            response.headers().put("Access-Control-Allow-Headers", "authorization, content-type, if-match, if-none-match");
             response.headers().put("Access-Control-Expose-Headers", EXPOSED);
             response.headers().put("Access-Control-Max-Age", "600");
             response.headers().put("Vary", "Origin");
