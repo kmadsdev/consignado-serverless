@@ -201,6 +201,7 @@ class UserRoutesTest {
                 "{\"action\":\"hold\"}"))).get("status").asText());
         assertEquals(400, w.handlers.admin(World.req("POST", "users/u1", admin, null, "{\"action\":\"remove\"}")).status());
         assertEquals(400, w.handlers.admin(World.req("POST", "users/u1", admin, null, "{\"action\":\"grant\",\"windows\":999}")).status());
+        assertEquals(400, w.handlers.admin(World.req("POST", "users/u1", admin, null, "{\"action\":\"grant\",\"windows\":11}")).status(), "1 to 10, as the admin form");
         assertEquals(404, w.handlers.admin(World.req("POST", "users/nobody", admin, null, "{\"action\":\"block\"}")).status());
         assertEquals(404, w.handlers.admin(World.req("GET", "secrets", admin, null, null)).status());
         assertTrue(w.audit.contains("admin.user.grant") && w.audit.contains("admin.user.block") && w.audit.contains("admin.read"));

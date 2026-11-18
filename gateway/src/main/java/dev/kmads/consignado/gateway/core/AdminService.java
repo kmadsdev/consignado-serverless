@@ -70,7 +70,7 @@ public final class AdminService {
             case "grant" -> {
                 JsonNode w = body.get("windows");
                 int windows = w == null || w.isNull() ? 1 : (w.isInt() ? w.asInt() : -1);
-                if (windows < 1 || windows > 20) throw ApiException.badRequest("Field windows must be 1 to 20");
+                if (windows < 1 || windows > 10) throw ApiException.badRequest("Field windows must be 1 to 10");
                 user.windowsMax = Math.min(1000, user.windowsMax + windows);
             }
             case "set" -> {
