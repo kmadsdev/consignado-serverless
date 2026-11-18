@@ -138,7 +138,7 @@ class ProxyRoutesTest {
         assertEquals(422, r.status());
         assertArrayEquals(w.upstream.body, r.body(), "the proxy does not change the JSON of the API");
         assertEquals("functions", r.headers().get("x-consignado-host"));
-        assertEquals("x-consignado-host, x-consignado-trace", r.headers().get("Access-Control-Expose-Headers"));
+        assertEquals("x-consignado-host, x-consignado-trace, etag, location", r.headers().get("Access-Control-Expose-Headers"));
         JsonNode t = trace(r);
         assertEquals("functions", t.get("host").asText());
         assertFalse(t.get("cold").asBoolean());
@@ -176,7 +176,7 @@ class ProxyRoutesTest {
     @Test
     void aSlowCallIsNotAColdStartAndTheAksHostIsNeverCold() throws Exception {
         w.upstream.onCall = () -> w.nanos += 4_800_000_000L;
-        JsonNode slow = trace(fn("POST", "api/v1/contracts/abc/activate", "good-u1", "{}"));
+        JsonNode slow = trace(fn("POST", "api/v1/simulations", "good-u1", "{}"));
         assertFalse(slow.get("cold").asBoolean(), "4.8 s is a slow call, not a cold start");
         assertFalse(stages(slow).contains("function-cold-start") || stages(slow).contains("jvm-start"));
         JsonNode last = slow.get("events").get(slow.get("events").size() - 1);

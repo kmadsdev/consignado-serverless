@@ -9,12 +9,20 @@ public interface Upstream {
                    byte[] body) {}
 
     /**
-     * timing: the raw response header X-Consignado-Timing of the API host, or null. It is the only upstream
-     * response header besides Content-Type that the gateway reads; none is passed on to the browser.
+     * timing: the raw response header X-Consignado-Timing of the API host, or null.
+     * etag: the raw ETag response header, or null.
+     * location: the Location response header as a path ("/api/v1/..."), or null. The adapter removes the
+     * origin when it is the origin of the API host it called; a Location on another origin becomes null.
+     * These are the only upstream response headers besides Content-Type that the gateway reads. ProxyService
+     * decides which of them go on to the browser.
      */
-    record Response(int status, String contentType, byte[] body, String timing) {
+    record Response(int status, String contentType, byte[] body, String timing, String etag, String location) {
         public Response(int status, String contentType, byte[] body) {
-            this(status, contentType, body, null);
+            this(status, contentType, body, null, null, null);
+        }
+
+        public Response(int status, String contentType, byte[] body, String timing) {
+            this(status, contentType, body, timing, null, null);
         }
     }
 

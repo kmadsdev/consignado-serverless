@@ -116,6 +116,9 @@ public final class World {
         public UpstreamException fail;
         /** Raw X-Consignado-Timing of the answers (null = the API host sent none). */
         public String timing;
+        /** Raw ETag and Location path of the answers (null = the API host sent none). */
+        public String etag;
+        public String location;
         public Runnable onCall = () -> { };
         public final Map<String, String> bodies = new HashMap<>();
         @Override public Response call(Request request) throws UpstreamException {
@@ -128,7 +131,7 @@ public final class World {
             }
             String fixed = bodies.get(request.path());
             return new Response(status, "application/json", fixed != null ? fixed.getBytes(StandardCharsets.UTF_8) : body,
-                    timing);
+                    timing, etag, location);
         }
         public Request last() { return calls.get(calls.size() - 1); }
     }
