@@ -128,7 +128,7 @@ public final class StatusService {
 
         List<Views.ServiceStatus> out = new ArrayList<>();
         out.add(new Views.ServiceStatus("edge", "consignado-edge", "Cloudflare Worker", null, "up",
-                "Cloudflare Worker consignado-edge; rate limit 40 requests / 10 s per IP", List.of(), List.of("gateway")));
+                "Cloudflare Worker consignado-edge. Rate limit: 40 requests per 10 seconds per IP", List.of(), List.of("gateway")));
         if (host == HostKind.FUNCTIONS) {
             var apiRes = resource(ids.apiApp());
             var apiHealth = health(ids.apiApp());
@@ -206,6 +206,10 @@ public final class StatusService {
         };
     }
 
+    private static String capitalize(String text) {
+        return text == null || text.isEmpty() ? text : Character.toUpperCase(text.charAt(0)) + text.substring(1);
+    }
+
     private static String healthText(String health) {
         return health == null ? "resource health: not readable" : "resource health: " + health;
     }
@@ -230,7 +234,7 @@ public final class StatusService {
         // The gateway answers this request: it runs, whatever ARM is late to say.
         if (id.equals("gateway") && !"up".equals(state)) state = "up";
         state = withHealth(state, h);
-        String detail = (armState == null ? "state not readable" : "State " + armState) + "; " + healthText(h);
+        String detail = (armState == null ? "state not readable" : "State " + armState) + ". " + capitalize(healthText(h));
         List<Views.Metric> shown = new ArrayList<>();
         req.ifPresent(x -> shown.addAll(StatusMetrics.requestMetrics(x, name)));
         m.ifPresent(x -> shown.addAll(StatusMetrics.metrics(id, x)));
@@ -274,8 +278,8 @@ public final class StatusService {
         String state = availability == null || availability >= 99.9 ? "up" : availability > 0 ? "degraded" : "down";
         state = withHealth(state, h);
         String detail = (availability == null ? "availability: no data in the last 5 min"
-                : "availability " + Math.round(availability * 10) / 10.0 + " % in the last 5 min") + "; "
-                + healthText(h);
+                : "availability " + Math.round(availability * 10) / 10.0 + " % in the last 5 min") + ". "
+                + capitalize(healthText(h));
         return new Views.ServiceStatus("keyvault", name, kind, region(r), state, detail,
                 m.map(x -> StatusMetrics.metrics("keyvault", x)).orElse(List.of()), sources(r, h, m));
     }
