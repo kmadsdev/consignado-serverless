@@ -64,9 +64,7 @@ public final class SnapshotService {
         }
         boolean ok = refresh();
         // The time is written also after a failure: a broken API host is not called each minute.
-        EngineRecord fresh = engine.load();
-        fresh.lastSnapshotAt = now;
-        engine.save(fresh);
+        EngineRows.updateQuietly(engine, r -> r.lastSnapshotAt = now, "snapshot time");
         return ok;
     }
 

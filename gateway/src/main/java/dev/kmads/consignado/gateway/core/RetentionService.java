@@ -61,8 +61,13 @@ public final class RetentionService {
             return null;
         }
         // The time is written first: a job that fails is tried again the next day, not each minute.
+        // With the ETag: when two instances are due at the same time, only the one that wrote first runs it.
         rec.lastRetentionAt = now;
-        engine.save(rec);
+        try {
+            engine.save(rec);
+        } catch (EngineStore.ConflictException e) {
+            return null;
+        }
         Result result = run(now);
         LOG.log(Level.INFO, Logs.fmt("retention: {0} audit rows deleted, {1} inactive accounts deleted",
                 result.auditRows(), result.accounts()));
