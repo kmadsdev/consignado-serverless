@@ -10,7 +10,7 @@ public record Config(
         String clientId, String tenantId, String apiAudience, String adminOid, String aksResourceId,
         String aksApiServerUrl, String aksCaCertB64, String aksInternalUrl, String apifnBaseUrl,
         String keyVaultUrl, String storageAccount, String ownerEmail, int windowMinutes, int windowsMax,
-        int cooldownMinutes, double budgetLimitUsd, String acsEndpoint, String acsSender, boolean allowDevOrigin,
+        int cooldownMinutes, double budgetLimit, String budgetCurrency, String acsEndpoint, String acsSender, boolean allowDevOrigin,
         boolean edgeKeyRequired, int dailyWindowsMax, String spaClientId, java.util.List<String> turnstileHostnames,
         String gatewayAppId, String apiAppId, String keyVaultId, String postgresId, String appInsightsId) {
 
@@ -45,7 +45,10 @@ public record Config(
                 number(env, "WINDOW_MINUTES", 1, 120),
                 number(env, "WINDOWS_MAX", 1, 100),
                 number(env, "COOLDOWN_MINUTES", 0, 240),
-                decimal(env, "BUDGET_LIMIT_USD"),
+                // BUDGET_LIMIT, in the billing currency. BUDGET_LIMIT_USD is the old name (the value was never USD):
+                // read it when BUDGET_LIMIT is absent, so the app settings and the code can be deployed in either order.
+                decimal(env, optional(env, "BUDGET_LIMIT") != null ? "BUDGET_LIMIT" : "BUDGET_LIMIT_USD"),
+                currency(env),
                 optional(env, "ACS_ENDPOINT"),
                 sender(env),
                 "true".equalsIgnoreCase(optional(env, "ALLOW_DEV_ORIGIN")),
@@ -68,7 +71,7 @@ public record Config(
 
     public Settings settings() {
         return new Settings(adminOid, Duration.ofMinutes(windowMinutes), windowsMax,
-                Duration.ofMinutes(cooldownMinutes), budgetLimitUsd, Duration.ofMinutes(15), Duration.ofMinutes(20), dailyWindowsMax);
+                Duration.ofMinutes(cooldownMinutes), budgetLimit, budgetCurrency, Duration.ofMinutes(15), Duration.ofMinutes(20), dailyWindowsMax);
     }
 
     /** The sender address: EMAIL_SENDER (the name that Terraform sets) or ACS_SENDER. */
@@ -119,6 +122,14 @@ public record Config(
 
     private static int optionalNumber(Function<String, String> env, String name, int fallback, int min, int max) {
         return optional(env, name) == null ? fallback : number(env, name, min, max);
+    }
+
+    /** BUDGET_CURRENCY: an ISO 4217 code; default BRL (the billing currency of this subscription). */
+    private static String currency(Function<String, String> env) {
+        String v = optional(env, "BUDGET_CURRENCY");
+        if (v == null) return Settings.DEFAULT_BUDGET_CURRENCY;
+        if (!v.matches("[A-Za-z]{3}")) throw invalid("BUDGET_CURRENCY");
+        return v.toUpperCase(java.util.Locale.ROOT);
     }
 
     private static double decimal(Function<String, String> env, String name) {

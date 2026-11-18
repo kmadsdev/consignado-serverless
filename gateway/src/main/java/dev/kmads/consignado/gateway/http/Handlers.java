@@ -299,7 +299,10 @@ public final class Handlers {
 
     // ---------------------------------------------------------------- helpers
 
-    /** True: an early alert. False: at or above the budget. Null: not a budget alert body. */
+    /**
+     * True: an early alert. False: at or above the budget. Null: not a budget alert body.
+     * SpendingAmount and Budget are both in the billing currency of the subscription (BRL), so they compare directly.
+     */
     private static Boolean belowBudget(byte[] body) {
         try {
             JsonNode data = Json.MAPPER.readTree(body).path("data");

@@ -28,7 +28,15 @@ public final class Views {
     public record SessionView(String id, String userId, String state, String requestedAt, String readyAt,
                               String expiresAt, List<LifecycleEvent> events, int requests) {}
 
-    public record Budget(double limitUsd, double spentUsd, String asOf) {}
+    /**
+     * Amounts in currency (the billing currency of the subscription). limitUsd and spentUsd repeat limit and spent
+     * for one release, for the old frontend: the values were never US dollars. Remove them after the frontend uses limit.
+     */
+    public record Budget(double limit, double spent, String currency, String asOf, double limitUsd, double spentUsd) {
+        public static Budget of(double limit, double spent, String currency, String asOf) {
+            return new Budget(limit, spent, currency, asOf, limit, spent);
+        }
+    }
 
     public record AdminState(Engine engine, Budget budget, boolean paused) {}
 
