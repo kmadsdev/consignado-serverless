@@ -41,7 +41,10 @@ public final class HttpUpstream implements Upstream {
             HttpResponse<byte[]> response = client.send(builder.build(), HttpResponse.BodyHandlers.ofByteArray());
             return new Response(response.statusCode(),
                     response.headers().firstValue("content-type").orElse(null), response.body(),
-                    response.headers().firstValue(ApiTiming.HEADER).orElse(null));
+                    response.headers().firstValue(ApiTiming.HEADER).orElse(null),
+                    response.headers().firstValue("etag").orElse(null),
+                    locationPath(response.headers().firstValue("location").orElse(null),
+                            functions ? functionsBaseUrl : aksBaseUrl));
         } catch (HttpTimeoutException e) {
             LOG.log(Level.WARNING, Logs.fmt("upstream {0} {1} timeout: {2}", request.host().id(), request.path(), Logs.of(e)));
             throw new UpstreamException(true);
@@ -51,6 +54,36 @@ public final class HttpUpstream implements Upstream {
         } catch (Exception e) {
             LOG.log(Level.WARNING, Logs.fmt("upstream {0} {1} failed: {2}", request.host().id(), request.path(), Logs.of(e)));
             throw new UpstreamException(false);
+        }
+    }
+
+    /**
+     * The path of a Location header, or null. A relative reference ("/api/v1/...") is kept. An absolute URL is
+     * kept only when its host is the host of the API base URL that was called (the scheme may differ: an
+     * ingress can end TLS); its path is returned, and a base path prefix of the base URL is removed.
+     * Any other value (another host, a malformed URL) is null: the gateway never sends a foreign URL on.
+     */
+    static String locationPath(String location, String baseUrl) {
+        if (location == null || location.isBlank() || baseUrl == null) return null;
+        try {
+            URI loc = URI.create(location.strip());
+            URI base = URI.create(baseUrl);
+            String path = loc.getRawPath();
+            if (path == null || path.isEmpty()) return null;
+            if (loc.isAbsolute() || loc.getRawAuthority() != null) {
+                if (loc.getHost() == null || base.getHost() == null
+                        || !loc.getHost().equalsIgnoreCase(base.getHost())) {
+                    return null;
+                }
+                String prefix = base.getRawPath() == null ? "" : base.getRawPath().replaceAll("/+$", "");
+                if (!prefix.isEmpty()) {
+                    if (!path.startsWith(prefix + "/")) return null;
+                    path = path.substring(prefix.length());
+                }
+            }
+            return path.startsWith("/") ? path : null;
+        } catch (IllegalArgumentException e) {
+            return null;
         }
     }
 }
