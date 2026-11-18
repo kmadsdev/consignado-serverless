@@ -140,11 +140,11 @@ class SecurityFixesTest {
 
     @Test
     void timerBudgetGuardPausesAtTheLimitAtMostEvery30Minutes() {
-        w.cost = Optional.of(new CostReader.Cost(59.99, w.clock.now));
+        w.cost = Optional.of(new CostReader.Cost(329.99, "BRL", w.clock.now));
         w.handlers.reaper();
         assertFalse(w.engineRow.paused);
         assertEquals(w.clock.now, w.engineRow.lastBudgetCheckAt);
-        w.cost = Optional.of(new CostReader.Cost(60.0, w.clock.now));
+        w.cost = Optional.of(new CostReader.Cost(330.0, "BRL", w.clock.now));
         w.clock.plus(Duration.ofMinutes(29));
         w.handlers.reaper();
         assertFalse(w.engineRow.paused, "not checked again before 30 minutes");
@@ -153,6 +153,23 @@ class SecurityFixesTest {
         assertTrue(w.engineRow.paused);
         assertEquals("budget", w.engineRow.pausedReason);
         assertTrue(w.audit.contains("budget.limit.reached"));
+    }
+
+    @Test
+    void budgetGuardComparesOnlyTheSameCurrency() {
+        // The defect of 2026-11-18: a limit of 60 compared with a cost in another currency. Same currency: compared.
+        assertFalse(EngineService.overBudget(new CostReader.Cost(329.99, "BRL", w.clock.now), 330.0, "BRL"));
+        assertTrue(EngineService.overBudget(new CostReader.Cost(330.0, "brl", w.clock.now), 330.0, "BRL"));
+        assertTrue(EngineService.overBudget(new CostReader.Cost(400.0, null, w.clock.now), 330.0, "BRL"),
+                "no currency column: the amount is taken as the billing currency");
+        // A cost in another currency is never compared with the limit (a wrong setting must not pause or hide).
+        assertFalse(EngineService.overBudget(new CostReader.Cost(400.0, "USD", w.clock.now), 330.0, "BRL"));
+        assertFalse(EngineService.overBudget(null, 330.0, "BRL"));
+        assertFalse(EngineService.overBudget(new CostReader.Cost(400.0, "BRL", w.clock.now), 0.0, "BRL"), "no limit");
+
+        w.cost = Optional.of(new CostReader.Cost(331.0, "USD", w.clock.now));
+        w.handlers.reaper();
+        assertFalse(w.engineRow.paused);
     }
 
     @Test

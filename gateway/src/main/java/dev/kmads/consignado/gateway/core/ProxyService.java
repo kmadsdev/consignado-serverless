@@ -23,11 +23,25 @@ public final class ProxyService {
     private static final Set<String> METHODS = Set.of("GET", "POST", "PATCH");
     /** Only these request headers go upstream. Authorization, cookies and hop-by-hop headers never do. */
     static final List<String> FORWARDED = List.of("accept", "accept-language", "content-type", "idempotency-key",
-            "if-none-match", "x-request-id");
+            "if-match", "if-none-match", "x-request-id");
+    /**
+     * The contract state changes. The gateway requires If-Match on them (428 without it), so a lost update
+     * cannot happen through the platform; the API keeps the header optional for its direct users (ADR 0003).
+     */
+    private static final Pattern CONTRACT_STATE_CHANGE =
+            Pattern.compile("^api/v1/contracts/[^/]+/(approve|reject|activate|settle|cancel)$");
+    /** An entity tag as RFC 9110 defines it: optional W/, then a quoted string without quotes inside. */
+    private static final Pattern ENTITY_TAG = Pattern.compile("^(W/)?\"[\\x21\\x23-\\x7E]{0,128}\"$");
     private static final Pattern PATH = Pattern.compile("^[A-Za-z0-9/_\\-.~]{1,512}$");
     private static final Pattern QUERY = Pattern.compile("^[A-Za-z0-9_\\-.~%&=+,:@/]{0,1024}$");
 
-    public record Result(int status, String contentType, byte[] body, HostKind host, Views.RequestTrace trace) {}
+    /** headers: the upstream response headers that go on to the browser (ETag, Location), never others. */
+    public record Result(int status, String contentType, byte[] body, HostKind host, Views.RequestTrace trace,
+                         Map<String, String> headers) {
+        public Result(int status, String contentType, byte[] body, HostKind host, Views.RequestTrace trace) {
+            this(status, contentType, body, host, trace, Map.of());
+        }
+    }
 
     private final Upstream upstream;
     private final Secrets secrets;
@@ -75,6 +89,10 @@ public final class ProxyService {
         } else if (!admin && !m.equals("GET") && isAgreementPath(path)) {
             // Agreement names are free text and the public snapshot shows them: only the owner writes them.
             throw ApiException.forbidden();
+        }
+        if (m.equals("POST") && CONTRACT_STATE_CHANGE.matcher(path).matches() && !hasPrecondition(headers)) {
+            throw new ApiException(428, "precondition-required",
+                    "If-Match is required: send the ETag of your last read of this contract");
         }
         Instant now = clock.instant();
         Session window = host == HostKind.AKS ? requireOpenWindow(user, now) : null;
@@ -125,7 +143,36 @@ public final class ProxyService {
                 upstreamMs, response.status(), ms(startNanos), null, ApiTiming.parse(response.timing()));
         String contentType = response.contentType() == null ? "application/json" : response.contentType();
         return new Result(response.status(), contentType, response.body() == null ? new byte[0] : response.body(),
-                host, trace);
+                host, trace, passedHeaders(host, response));
+    }
+
+    /**
+     * The allow-list of upstream response headers: ETag when it is a valid entity tag, and Location when it is
+     * an /api/v1/ path of the host that was called, rewritten to the public path of that host
+     * (/api/fn/api/v1/... or /api/aks/api/v1/...). Anything else is dropped.
+     */
+    static Map<String, String> passedHeaders(HostKind host, Upstream.Response response) {
+        Map<String, String> out = new LinkedHashMap<>();
+        String etag = response.etag() == null ? null : response.etag().strip();
+        if (etag != null && ENTITY_TAG.matcher(etag).matches()) out.put("ETag", etag);
+        String location = publicLocation(host, response.location());
+        if (location != null) out.put("Location", location);
+        return out;
+    }
+
+    static String publicLocation(HostKind host, String upstreamPath) {
+        if (upstreamPath == null) return null;
+        try {
+            return "/api/" + (host == HostKind.FUNCTIONS ? "fn" : "aks") + "/" + cleanPath(upstreamPath);
+        } catch (ApiException e) {
+            return null;
+        }
+    }
+
+    /** An If-Match with a real tag. "*" matches any version, so it is not a precondition here. */
+    private static boolean hasPrecondition(Map<String, String> headers) {
+        String value = headers == null ? null : headers.get("if-match");
+        return value != null && !value.isBlank() && !value.strip().equals("*");
     }
 
     private Result failure(HostKind host, Instant now, boolean guest, long identityMs, long kvMs, boolean kvCached,

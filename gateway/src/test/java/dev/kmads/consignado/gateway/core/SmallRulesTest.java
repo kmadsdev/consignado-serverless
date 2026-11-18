@@ -197,6 +197,21 @@ class SmallRulesTest {
         daily.put("DAILY_WINDOWS_MAX", "0");
         assertThrows(IllegalStateException.class, () -> Config.load(daily::get));
         assertNull(c.spaClientId());
+        // Budget: BUDGET_LIMIT wins; the old name BUDGET_LIMIT_USD is the fallback; currency default BRL.
+        assertEquals(60.0, c.settings().budgetLimit());
+        assertEquals("BRL", c.settings().budgetCurrency());
+        Map<String, String> budget = env();
+        budget.put("BUDGET_LIMIT", "330");
+        budget.put("BUDGET_CURRENCY", "eur");
+        assertEquals(330.0, Config.load(budget::get).settings().budgetLimit());
+        assertEquals("EUR", Config.load(budget::get).settings().budgetCurrency());
+        budget.remove("BUDGET_LIMIT_USD");
+        assertEquals(330.0, Config.load(budget::get).settings().budgetLimit());
+        budget.put("BUDGET_CURRENCY", "R$");
+        assertThrows(IllegalStateException.class, () -> Config.load(budget::get));
+        Map<String, String> none = env();
+        none.remove("BUDGET_LIMIT_USD");
+        assertThrows(IllegalStateException.class, () -> Config.load(none::get));
         assertEquals(java.util.List.of("consignado.kmads.dev", "cluster.consignado.kmads.dev"), c.turnstileHostnames());
         assertNull(c.acsEndpoint());
         assertFalse(c.toString().contains("owner@example.com"));

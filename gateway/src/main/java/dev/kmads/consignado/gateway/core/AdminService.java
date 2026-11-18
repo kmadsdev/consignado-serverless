@@ -70,7 +70,7 @@ public final class AdminService {
             case "grant" -> {
                 JsonNode w = body.get("windows");
                 int windows = w == null || w.isNull() ? 1 : (w.isInt() ? w.asInt() : -1);
-                if (windows < 1 || windows > 20) throw ApiException.badRequest("Field windows must be 1 to 20");
+                if (windows < 1 || windows > 10) throw ApiException.badRequest("Field windows must be 1 to 10");
                 user.windowsMax = Math.min(1000, user.windowsMax + windows);
             }
             case "set" -> {
@@ -123,8 +123,10 @@ public final class AdminService {
         Instant now = clock.instant();
         // When the cost API does not answer, the value is unknown: asOf is the epoch, not "now".
         Views.Budget budget = cost.monthToDate()
-                .map(c -> new Views.Budget(settings.budgetLimitUsd(), c.usd(), Times.iso(c.asOf())))
-                .orElseGet(() -> new Views.Budget(settings.budgetLimitUsd(), 0.0, Times.iso(Instant.EPOCH)));
+                .map(c -> Views.Budget.of(settings.budgetLimit(), c.amount(),
+                        c.currency() != null ? c.currency() : settings.budgetCurrency(), Times.iso(c.asOf())))
+                .orElseGet(() -> Views.Budget.of(settings.budgetLimit(), 0.0, settings.budgetCurrency(),
+                        Times.iso(Instant.EPOCH)));
         return new Views.AdminState(view, budget, view.pausedReason() != null);
     }
 

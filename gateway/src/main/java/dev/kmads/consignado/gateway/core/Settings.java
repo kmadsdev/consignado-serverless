@@ -8,7 +8,10 @@ public record Settings(
         Duration window,
         int windowsMax,
         Duration cooldown,
-        double budgetLimitUsd,
+        /** Monthly budget in the billing currency of the subscription (the same currency as the cost query). */
+        double budgetLimit,
+        /** ISO 4217 code of budgetLimit; used when the cost answer has no currency. */
+        String budgetCurrency,
         Duration startTimeout,
         Duration idleGrace,
         /** Cost guard over all accounts: new access windows in any 24 hours (the owner is not counted against it). */
@@ -16,8 +19,10 @@ public record Settings(
 
     public static final int DEFAULT_DAILY_WINDOWS_MAX = 12;
 
+    public static final String DEFAULT_BUDGET_CURRENCY = "BRL";
+
     public static Settings defaults(String adminOid) {
-        return new Settings(adminOid, Duration.ofMinutes(15), 3, Duration.ofMinutes(15), 60.0,
+        return new Settings(adminOid, Duration.ofMinutes(15), 3, Duration.ofMinutes(15), 330.0, DEFAULT_BUDGET_CURRENCY,
                 Duration.ofMinutes(15), Duration.ofMinutes(20), DEFAULT_DAILY_WINDOWS_MAX);
     }
 }

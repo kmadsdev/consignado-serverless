@@ -271,7 +271,7 @@ class UpstreamTimingTest {
             assertNotEquals("x-consignado-timing", n);
             assertNotEquals("server-timing", n);
         }
-        assertEquals("x-consignado-host, x-consignado-trace", r.headers().get("Access-Control-Expose-Headers"));
+        assertEquals("x-consignado-host, x-consignado-trace, etag, location", r.headers().get("Access-Control-Expose-Headers"));
         assertTrue(trace(r).has("api"), "the data reaches the browser only inside the trace");
     }
 

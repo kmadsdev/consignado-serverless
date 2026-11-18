@@ -201,16 +201,21 @@ class UserRoutesTest {
                 "{\"action\":\"hold\"}"))).get("status").asText());
         assertEquals(400, w.handlers.admin(World.req("POST", "users/u1", admin, null, "{\"action\":\"remove\"}")).status());
         assertEquals(400, w.handlers.admin(World.req("POST", "users/u1", admin, null, "{\"action\":\"grant\",\"windows\":999}")).status());
+        assertEquals(400, w.handlers.admin(World.req("POST", "users/u1", admin, null, "{\"action\":\"grant\",\"windows\":11}")).status(), "1 to 10, as the admin form");
         assertEquals(404, w.handlers.admin(World.req("POST", "users/nobody", admin, null, "{\"action\":\"block\"}")).status());
         assertEquals(404, w.handlers.admin(World.req("GET", "secrets", admin, null, null)).status());
         assertTrue(w.audit.contains("admin.user.grant") && w.audit.contains("admin.user.block") && w.audit.contains("admin.read"));
 
         JsonNode state = World.json(w.handlers.admin(World.req("GET", "state", admin, null, null)));
-        assertEquals(60.0, state.get("budget").get("limitUsd").asDouble());
+        assertEquals(330.0, state.get("budget").get("limit").asDouble());
+        assertEquals("BRL", state.get("budget").get("currency").asText(), "unknown cost: the currency of the setting");
+        assertEquals(330.0, state.get("budget").get("limitUsd").asDouble(), "old field, same number, one release");
         assertEquals("1970-01-01T00:00:00Z", state.get("budget").get("asOf").asText(), "unknown cost is not shown as fresh");
-        w.cost = java.util.Optional.of(new dev.kmads.consignado.gateway.ports.CostReader.Cost(12.34, w.clock.now));
+        w.cost = java.util.Optional.of(new dev.kmads.consignado.gateway.ports.CostReader.Cost(12.34, "BRL", w.clock.now));
         state = World.json(w.handlers.admin(World.req("GET", "state", admin, null, null)));
-        assertEquals(12.34, state.get("budget").get("spentUsd").asDouble());
+        assertEquals(12.34, state.get("budget").get("spent").asDouble());
+        assertEquals("BRL", state.get("budget").get("currency").asText());
+        assertEquals(12.34, state.get("budget").get("spentUsd").asDouble(), "old field, same number, one release");
         assertFalse(state.get("paused").asBoolean());
         assertTrue(World.json(w.handlers.admin(World.req("GET", "sessions", admin, null, null))).isArray());
         assertTrue(World.json(w.handlers.admin(World.req("GET", "contacts", admin, null, null))).isArray());

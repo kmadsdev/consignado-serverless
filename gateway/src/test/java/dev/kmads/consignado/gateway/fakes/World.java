@@ -116,6 +116,9 @@ public final class World {
         public UpstreamException fail;
         /** Raw X-Consignado-Timing of the answers (null = the API host sent none). */
         public String timing;
+        /** Raw ETag and Location path of the answers (null = the API host sent none). */
+        public String etag;
+        public String location;
         public Runnable onCall = () -> { };
         public final Map<String, String> bodies = new HashMap<>();
         @Override public Response call(Request request) throws UpstreamException {
@@ -128,7 +131,7 @@ public final class World {
             }
             String fixed = bodies.get(request.path());
             return new Response(status, "application/json", fixed != null ? fixed.getBytes(StandardCharsets.UTF_8) : body,
-                    timing);
+                    timing, etag, location);
         }
         public Request last() { return calls.get(calls.size() - 1); }
     }
@@ -194,7 +197,13 @@ public final class World {
     public boolean mailFails;
     public Optional<CostReader.Cost> cost = Optional.empty();
     public long nanos;
+    /** The engine row, with an ETag like the table: a stale save gets EngineStore.ConflictException. */
     public EngineRecord engineRow = new EngineRecord();
+    private long engineVersion;
+    public int engineSaves;
+    /** Runs once, right after the next engine row load: another writer between a read and its write. */
+    public Runnable afterEngineLoad;
+    public final EngineStore engineStore;
     public final Settings settings = Settings.defaults(ADMIN);
     public final EngineService engine;
     public final SnapshotService snapshot;
@@ -230,11 +239,28 @@ public final class World {
                 c.pausedReason = engineRow.pausedReason; c.lastStopAt = engineRow.lastStopAt;
                 c.activeSessions = engineRow.activeSessions; c.externalSince = engineRow.externalSince;
                 c.lastSnapshotAt = engineRow.lastSnapshotAt; c.lastRetentionAt = engineRow.lastRetentionAt;
-                c.lastBudgetCheckAt = engineRow.lastBudgetCheckAt;
+                c.lastBudgetCheckAt = engineRow.lastBudgetCheckAt; c.lastStartAt = engineRow.lastStartAt;
+                c.etag = engineRow.etag;
+                Runnable hook = afterEngineLoad;
+                afterEngineLoad = null;
+                if (hook != null) hook.run();
                 return c;
             }
-            @Override public void save(EngineRecord record) { engineRow = record; }
+            @Override public void save(EngineRecord record) {
+                engineSaves++;
+                if (!java.util.Objects.equals(record.etag, engineRow.etag)) throw new EngineStore.ConflictException();
+                record.etag = "e" + (++engineVersion);
+                EngineRecord c = new EngineRecord();
+                c.state = record.state; c.since = record.since; c.paused = record.paused;
+                c.pausedReason = record.pausedReason; c.lastStopAt = record.lastStopAt;
+                c.activeSessions = record.activeSessions; c.externalSince = record.externalSince;
+                c.lastSnapshotAt = record.lastSnapshotAt; c.lastRetentionAt = record.lastRetentionAt;
+                c.lastBudgetCheckAt = record.lastBudgetCheckAt; c.lastStartAt = record.lastStartAt;
+                c.etag = record.etag;
+                engineRow = c;
+            }
         };
+        this.engineStore = engineStore;
         ContactStore contactStore = new ContactStore() {
             @Override public void save(Contact contact) { contactRows.add(contact); }
             @Override public List<Contact> list() { return List.copyOf(contactRows); }

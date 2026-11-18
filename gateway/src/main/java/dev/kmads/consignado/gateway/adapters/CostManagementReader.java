@@ -13,13 +13,18 @@ import java.util.Optional;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-/** Month-to-date cost of the resource group of the cluster, from the Cost Management query API. Cached 30 minutes. */
+/**
+ * Month-to-date cost of the resource group of the cluster, from the Cost Management query API. Cached 30 minutes.
+ * The aggregation column is "Cost" (the billing currency, BRL on this subscription). "CostUSD" is the same cost
+ * converted to US dollars, but the Currency column still names the billing currency: comparing it with the budget
+ * (which Azure keeps in the billing currency) was the defect of 2026-11-18.
+ */
 public final class CostManagementReader implements CostReader {
     private static final Logger LOG = Logger.getLogger("consignado.gateway");
     private static final Duration TTL = Duration.ofMinutes(30);
     private static final Duration FAILURE_TTL = Duration.ofMinutes(5);
     private static final String BODY = "{\"type\":\"ActualCost\",\"timeframe\":\"MonthToDate\",\"dataset\":"
-            + "{\"granularity\":\"None\",\"aggregation\":{\"totalCost\":{\"name\":\"CostUSD\",\"function\":\"Sum\"}}}}";
+            + "{\"granularity\":\"None\",\"aggregation\":{\"totalCost\":{\"name\":\"Cost\",\"function\":\"Sum\"}}}}";
 
     private final AzureTokens tokens;
     private final URI uri;
@@ -45,7 +50,7 @@ public final class CostManagementReader implements CostReader {
                     .POST(HttpRequest.BodyPublishers.ofString(BODY)).build();
             HttpResponse<String> response = Http.CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() != 200) throw new IllegalStateException("HTTP " + response.statusCode());
-            cached = new Cost(parse(response.body()), now);
+            cached = new Cost(parse(response.body()), currency(response.body()), now);
             nextTry = now.plus(TTL);
         } catch (Exception e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
@@ -63,5 +68,19 @@ public final class CostManagementReader implements CostReader {
             if (cell.isNumber()) return Math.round(cell.asDouble() * 100.0) / 100.0;
         }
         throw new IllegalStateException("no cost column");
+    }
+
+    /** The value of the "Currency" column in the first row (upper case), or null when there is none. */
+    static String currency(String body) throws Exception {
+        JsonNode props = Json.MAPPER.readTree(body).path("properties");
+        JsonNode columns = props.path("columns");
+        JsonNode rows = props.path("rows");
+        for (int i = 0; i < columns.size(); i++) {
+            if (!"Currency".equalsIgnoreCase(columns.get(i).path("name").asText())) continue;
+            if (rows.isEmpty()) return null;
+            String v = rows.get(0).path(i).asText("");
+            return v.matches("[A-Za-z]{3}") ? v.toUpperCase(java.util.Locale.ROOT) : null;
+        }
+        return null;
     }
 }
