@@ -158,7 +158,7 @@ class StatusServiceTest {
         assertEquals("Azure Function (custom handler)", fn.get("kind").asText());
         assertEquals("belgiumcentral", fn.get("region").asText());
         assertEquals("up", fn.get("state").asText());
-        assertEquals("State Running; resource health: Available", fn.get("detail").asText());
+        assertEquals("State Running. Resource health: Available", fn.get("detail").asText());
         assertEquals(1.0, metric(fn, "instances"));
         assertEquals(0.0, metric(fn, "requests"));
         assertEquals(192.0, metric(service(s, "gateway"), "requests"));
@@ -177,8 +177,8 @@ class StatusServiceTest {
         assertEquals("signing keys fetched 3 min ago", service(s, "identity").get("detail").asText());
         assertEquals("up", service(s, "edge").get("state").asText());
         assertFalse(service(s, "edge").has("region"));
-        assertEquals("resource health: not readable", service(s, "gateway").get("detail").asText()
-                .replace("State Running; ", ""), "health of the gateway was not given");
+        assertEquals("Resource health: not readable", service(s, "gateway").get("detail").asText()
+                .replace("State Running. ", ""), "health of the gateway was not given");
     }
 
     @Test

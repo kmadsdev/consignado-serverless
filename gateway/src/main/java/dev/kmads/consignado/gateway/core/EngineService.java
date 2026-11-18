@@ -518,7 +518,7 @@ public final class EngineService {
                 "pod " + podName + " starts Spring Boot and connects to PostgreSQL", false, databaseMs));
         steps.add(new Step(Stages.READINESS, podReady && view.readyEndpoints() > 0,
                 view.readyEndpoints() + " ready endpoint(s) behind Service consignado-api",
-                "pod " + podName + " is Ready; waiting for the Service endpoints", false));
+                "pod " + podName + " is Ready, waiting for the Service endpoints", false));
 
         boolean all = true;
         for (Step step : steps) {
