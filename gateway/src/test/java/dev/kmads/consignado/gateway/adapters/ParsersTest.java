@@ -90,6 +90,15 @@ class ParsersTest {
         assertEquals(12.35, CostManagementReader.parse("{\"properties\":{\"columns\":[{\"name\":\"CostUSD\"},{\"name\":\"Currency\"}],\"rows\":[[12.3456,\"USD\"]]}}"));
         assertEquals(0.0, CostManagementReader.parse("{\"properties\":{\"rows\":[]}}"));
         assertThrows(Exception.class, () -> CostManagementReader.parse("{\"properties\":{\"rows\":[[\"USD\"]]}}"));
+        // The live answer of 2026-11-18 (aggregation "Cost"): the amount and the billing currency.
+        String live = "{\"properties\":{\"columns\":[{\"name\":\"Cost\",\"type\":\"Number\"},"
+                + "{\"name\":\"Currency\",\"type\":\"String\"}],\"rows\":[[5.49229332639736,\"BRL\"]]}}";
+        assertEquals(5.49, CostManagementReader.parse(live));
+        assertEquals("BRL", CostManagementReader.currency(live));
+        assertEquals("USD", CostManagementReader.currency("{\"properties\":{\"columns\":[{\"name\":\"Currency\"},{\"name\":\"Cost\"}],\"rows\":[[\"usd\",1.5]]}}"));
+        assertNull(CostManagementReader.currency("{\"properties\":{\"columns\":[{\"name\":\"Cost\"}],\"rows\":[[1.5]]}}"));
+        assertNull(CostManagementReader.currency("{\"properties\":{\"columns\":[{\"name\":\"Cost\"},{\"name\":\"Currency\"}],\"rows\":[]}}"));
+        assertNull(CostManagementReader.currency("{\"properties\":{\"columns\":[{\"name\":\"Currency\"}],\"rows\":[[\"R$\"]]}}"));
     }
 
     @Test

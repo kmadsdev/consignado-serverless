@@ -366,13 +366,25 @@ public final class EngineService {
         rec.lastBudgetCheckAt = now;
         engine.save(rec);
         if (rec.paused && "budget".equals(rec.pausedReason)) return false;
-        double limit = settings.budgetLimitUsd();
-        boolean over = limit > 0 && cost.monthToDate().map(c -> c.usd() >= limit).orElse(false);
-        if (!over) return false;
-        LOG.warning(Logs.fmt("budget guard: month-to-date cost is at or above {0} USD; pausing", limit));
+        if (!overBudget(cost.monthToDate().orElse(null), settings.budgetLimit(), settings.budgetCurrency())) return false;
+        LOG.warning(Logs.fmt("budget guard: month-to-date cost is at or above {0} {1}; pausing",
+                settings.budgetLimit(), settings.budgetCurrency()));
         audit.record("budget-guard", "budget.limit.reached", "engine", null);
         budgetExceeded();
         return true;
+    }
+
+    /**
+     * The pause rule: the cost and the limit must be in the same currency. Unknown cost, no limit, or a cost in a
+     * different currency (a wrong setting): no pause here; the Azure budget alert (webhook) still applies.
+     */
+    static boolean overBudget(dev.kmads.consignado.gateway.ports.CostReader.Cost cost, double limit, String currency) {
+        if (cost == null || limit <= 0) return false;
+        if (cost.currency() != null && currency != null && !cost.currency().equalsIgnoreCase(currency)) {
+            LOG.warning(Logs.fmt("budget guard: cost is in {0}, the limit is in {1}; not compared", cost.currency(), currency));
+            return false;
+        }
+        return cost.amount() >= limit;
     }
 
     /** The budget alert: pause with reason budget and stop the cluster now. */

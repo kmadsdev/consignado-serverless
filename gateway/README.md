@@ -34,7 +34,7 @@ Plain Java: no Spring, no dependency injection framework. All objects are built 
 | `GET /api/admin/sessions`, `/state`, `/contacts` | admin | `Session[]`, `AdminState`, `ContactRequest[]` |
 | `POST /api/admin/pause` `{paused}`, `POST /api/admin/engine/stop` | admin | `AdminState` |
 | `POST /api/hooks/budget` | function key | spend at or above the budget: pauses (reason `budget`) and stops the cluster; spend below: audit only; a body without numeric `data.SpendingAmount` and `data.Budget`: 400, no pause |
-| timer `reaper`, every minute | - | advances sessions, ends windows, stops the idle cluster, checks the month-to-date cost every 30 minutes (at or above `BUDGET_LIMIT_USD`: same pause as the budget hook), refreshes the snapshot every 10 minutes, runs the retention job once per day |
+| timer `reaper`, every minute | - | advances sessions, ends windows, stops the idle cluster, checks the month-to-date cost every 30 minutes (at or above `BUDGET_LIMIT`, in the same currency: same pause as the budget hook), refreshes the snapshot every 10 minutes, runs the retention job once per day |
 
 Errors are `{code, message}`. On an upstream failure the failed stage of the trace has `status: "error"` and a short `detail` (`upstream answered 503`, `timeout after 30 s` (Functions) / `10 s` (AKS), `no answer from the API host (connection failed)`, `function key not found in Key Vault` on stage `keyvault`), and the error answer still carries `x-consignado-trace`. The proxy returns the status and the JSON of the API host unchanged, plus `x-consignado-host` and `x-consignado-trace` (base64url JSON `RequestTrace`). `cold` is true only for the Functions host and only when the upstream call took more than 8 s; the AKS host never reports `cold`.
 
@@ -66,7 +66,9 @@ The gateway reads only `Content-Type` and `X-Consignado-Timing` from the upstrea
 
 ## Configuration (environment variables, names only)
 
-Required: `AZURE_CLIENT_ID`, `ENTRA_TENANT_ID`, `ENTRA_API_AUDIENCE`, `ADMIN_OID`, `AKS_RESOURCE_ID`, `AKS_API_SERVER_URL`, `AKS_CA_CERT_B64`, `AKS_INTERNAL_URL`, `APIFN_BASE_URL`, `KEY_VAULT_URL`, `STORAGE_ACCOUNT`, `OWNER_EMAIL`, `WINDOW_MINUTES`, `WINDOWS_MAX`, `COOLDOWN_MINUTES`, `BUDGET_LIMIT_USD`.
+Required: `AZURE_CLIENT_ID`, `ENTRA_TENANT_ID`, `ENTRA_API_AUDIENCE`, `ADMIN_OID`, `AKS_RESOURCE_ID`, `AKS_API_SERVER_URL`, `AKS_CA_CERT_B64`, `AKS_INTERNAL_URL`, `APIFN_BASE_URL`, `KEY_VAULT_URL`, `STORAGE_ACCOUNT`, `OWNER_EMAIL`, `WINDOW_MINUTES`, `WINDOWS_MAX`, `COOLDOWN_MINUTES`, `BUDGET_LIMIT` (or its old name `BUDGET_LIMIT_USD`).
+
+Budget: `BUDGET_LIMIT` is the monthly budget in the **billing currency** of the subscription (BRL: R$ 330, about US$60), the same currency as the Azure budget and the Cost Management query (aggregation `Cost`; `CostUSD` would give US dollars). `BUDGET_CURRENCY` (optional, default `BRL`) is used when the cost answer has no `Currency` column; a cost in another currency is never compared with the limit. `GET /api/admin/state` answers `budget: {limit, spent, currency, asOf}` and, for one release, also `limitUsd` and `spentUsd` with the same numbers (they were never US dollars).
 
 Optional, status page (a missing id makes that service `unknown` with detail `not configured`): `GATEWAY_APP_ID`, `API_APP_ID`, `KEY_VAULT_ID`, `POSTGRES_ID`, `APPINSIGHTS_ID` (without it: no `requests`, `errors`, `latency-avg`) (full ARM resource ids; the cluster id is `AKS_RESOURCE_ID`).
 
