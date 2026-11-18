@@ -300,7 +300,7 @@ class StatusServiceTest {
         assertEquals("degraded", pods.get("state").asText());
         assertEquals(1.0, metric(pods, "replicas"));
         assertTrue(pods.get("detail").asText().endsWith(
-                "; Deployment consignado-api: 1 of 2 replicas ready; HPA consignado-api: current 1, desired 2 (1 to 3)"),
+                ". Deployment consignado-api: 1 of 2 replicas ready. HPA consignado-api: current 1, desired 2 (1 to 3)"),
                 pods.get("detail").asText());
 
         w.clock.plus(Duration.ofSeconds(15));
