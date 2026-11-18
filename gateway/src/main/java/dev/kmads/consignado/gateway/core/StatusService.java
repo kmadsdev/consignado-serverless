@@ -308,7 +308,7 @@ public final class StatusService {
         if (alive != null && alive < 1 && "up".equals(state)) state = "down";
         if (armState == null && alive != null) state = alive >= 1 ? "up" : "down";
         String detail = (armState == null ? "server state not readable" : "Server state " + armState)
-                + (alive == null ? "" : alive >= 1 ? "; database answers (is_db_alive 1)" : "; is_db_alive 0");
+                + (alive == null ? "" : alive >= 1 ? ". The database answers (is_db_alive 1)" : ". The database does not answer (is_db_alive 0)");
         List<String> source = new ArrayList<>();
         if (m.isPresent()) source.add("azure-monitor");
         if (r.isPresent()) source.add("arm");
@@ -406,13 +406,13 @@ public final class StatusService {
         if (deployment != null) {
             replicas = deployment.ready();
             replicasLabel = "Ready replicas of " + deployment.desired() + " desired";
-            detail.append("; Deployment ").append(deployment.name()).append(": ").append(deployment.ready())
+            detail.append(". Deployment ").append(deployment.name()).append(": ").append(deployment.ready())
                     .append(" of ").append(deployment.desired()).append(" replicas ready");
             if (deployment.desired() > 0 && deployment.ready() < deployment.desired() && "up".equals(state)) {
                 state = "degraded";
             }
         }
-        workload.flatMap(wl -> wl.autoscalers().stream().findFirst()).ifPresent(h -> detail.append("; HPA ")
+        workload.flatMap(wl -> wl.autoscalers().stream().findFirst()).ifPresent(h -> detail.append(". HPA ")
                 .append(h.name()).append(": current ").append(h.current()).append(", desired ").append(h.desired())
                 .append(" (").append(h.min()).append(" to ").append(h.max()).append(")"));
         List<Views.Metric> m = List.of(
